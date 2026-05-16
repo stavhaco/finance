@@ -57,12 +57,18 @@ class Config:
     news_max_headlines: int = field(default_factory=lambda: max(5, _env_int("DEMO_TRADER_NEWS_MAX", 60)))
     ollama_timeout_sec: int = field(default_factory=lambda: max(30, _env_int("DEMO_TRADER_OLLAMA_TIMEOUT_SEC", 240)))
     knowledge_prompt_rows: int = field(default_factory=lambda: max(10, _env_int("DEMO_TRADER_KNOWLEDGE_DB_ROWS", 80)))
+    maya_lookback_days: int = field(default_factory=lambda: max(1, _env_int("DEMO_TRADER_MAYA_LOOKBACK_DAYS", 5)))
+    maya_breaking_limit: int = field(default_factory=lambda: max(5, _env_int("DEMO_TRADER_MAYA_BREAKING_LIMIT", 80)))
+    maya_post_max_keep: int = field(default_factory=lambda: max(10, _env_int("DEMO_TRADER_MAYA_POST_MAX_KEEP", 150)))
+    maya_http_timeout_sec: int = field(default_factory=lambda: max(15, _env_int("DEMO_TRADER_MAYA_HTTP_TIMEOUT_SEC", 60)))
 
     def rss_feeds(self) -> Sequence[str]:
         raw = _env_str(
             "DEMO_TRADER_RSS_FEEDS",
-            "https://www.ynet.co.il/integration/StoryRss1854.xml,"
+            "https://www.globes.co.il/webservice/rss/rssfeeder.asmx/FeederNode?iID=607,"
+            "https://www.globes.co.il/webservice/rss/rssfeeder.asmx/FeederNode?iID=945,"
             "https://www.globes.co.il/webservice/rss/rssfeeder.asmx/FeederNode?iID=585,"
+            "https://www.globes.co.il/webservice/rss/rssfeeder.asmx/FeederNode?iID=572,"
             "https://www.calcalist.co.il/GeneralRSS/0,,L-5619,00.xml",
         )
         return tuple(u.strip() for u in raw.split(",") if u.strip())

@@ -14,6 +14,11 @@ def _norm_he(s: str) -> str:
     return s
 
 
+def match_company_text(text: str) -> str | None:
+    synthetic = Headline(title=_norm_he(text), link="", source="", published=None)
+    return match_company(synthetic)
+
+
 def match_company(headline: Headline) -> str | None:
     title = _norm_he(headline.title)
     title_l = title.lower()
@@ -44,3 +49,30 @@ def ingest_headlines(conn: sqlite3.Connection, headlines: list[Headline]) -> int
         if ok:
             inserted += 1
     return inserted
+
+
+def ingest_maya_rows(conn: sqlite3.Connection, rows: list) -> int:
+    """Persist Maya `MayaKnowledgeRow` items (duck-typed) into knowledge_events."""
+    inserted = 0
+    for row in rows:
+        title = str(getattr(row, "title", "") or "").strip()
+        url = str(getattr(row, "url", "") or "").strip()
+        if not title or not url:
+            continue
+        source = str(getattr(row, "source", "maya"))
+        snippet = getattr(row, "snippet", None)
+        blob = title
+        if snippet:
+            blob = f"{title} | {snippet}"
+        sym = match_company_text(blob)
+        if insert_knowledge_event(
+            conn,
+            source=source,
+            url=url,
+            title=title,
+            snippet=str(snippet) if snippet is not None else None,
+            matched_symbol=sym,
+        ):
+            inserted += 1
+    return inserted
+

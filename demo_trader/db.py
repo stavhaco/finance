@@ -94,6 +94,34 @@ def init_schema(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
+_COMPANY_FUNDAMENTAL_COLS: tuple[tuple[str, str], ...] = (
+    ("last_price", "REAL"),
+    ("currency", "TEXT"),
+    ("market_cap", "REAL"),
+    ("enterprise_value", "REAL"),
+    ("trailing_pe", "REAL"),
+    ("forward_pe", "REAL"),
+    ("price_to_book", "REAL"),
+    ("beta", "REAL"),
+    ("fifty_two_week_high", "REAL"),
+    ("fifty_two_week_low", "REAL"),
+    ("return_ytd_pct", "REAL"),
+    ("return_1q_pct", "REAL"),
+    ("return_1y_pct", "REAL"),
+    ("avg_volume_10d", "REAL"),
+    ("fundamentals_updated_ts", "TEXT"),
+)
+
+
+def ensure_company_fundamentals_columns(conn: sqlite3.Connection) -> None:
+    cur = conn.execute("PRAGMA table_info(companies)")
+    have = {str(r[1]) for r in cur.fetchall()}
+    for col, typ in _COMPANY_FUNDAMENTAL_COLS:
+        if col not in have:
+            conn.execute(f"ALTER TABLE companies ADD COLUMN {col} {typ}")
+    conn.commit()
+
+
 def upsert_companies(conn: sqlite3.Connection, rows: Iterable[tuple[str, str, str, str, str]]) -> None:
     conn.executemany(
         """
@@ -131,6 +159,80 @@ def insert_knowledge_event(
         return True
     except sqlite3.IntegrityError:
         return False
+
+
+def update_company_fundamentals(conn: sqlite3.Connection, stats: dict[str, Any]) -> None:
+    sym = str(stats.get("symbol") or "").strip()
+    if not sym:
+        return
+    now = _utc_iso()
+    conn.execute(
+        """
+        UPDATE companies SET
+            last_price=?,
+            currency=?,
+            market_cap=?,
+            enterprise_value=?,
+            trailing_pe=?,
+            forward_pe=?,
+            price_to_book=?,
+            beta=?,
+            fifty_two_week_high=?,
+            fifty_two_week_low=?,
+            return_ytd_pct=?,
+            return_1q_pct=?,
+            return_1y_pct=?,
+            avg_volume_10d=?,
+            fundamentals_updated_ts=?
+        WHERE symbol=?
+        """,
+        (
+            stats.get("last_price"),
+            stats.get("currency"),
+            stats.get("market_cap"),
+            stats.get("enterprise_value"),
+            stats.get("trailing_pe"),
+            stats.get("forward_pe"),
+            stats.get("price_to_book"),
+            stats.get("beta"),
+            stats.get("fifty_two_week_high"),
+            stats.get("fifty_two_week_low"),
+            stats.get("return_ytd_pct"),
+            stats.get("return_1q_pct"),
+            stats.get("return_1y_pct"),
+            stats.get("avg_volume_10d"),
+            now,
+            sym,
+        ),
+    )
+    conn.commit()
+
+
+def companies_fundamentals_digest(conn: sqlite3.Connection, symbols: Iterable[str]) -> str:
+    syms = list(dict.fromkeys([s for s in symbols if s]))
+    if not syms:
+        return "(אין סימולים לנתוני סטטיסטיקה)"
+    placeholders = ",".join(["?"] * len(syms))
+    cur = conn.execute(
+        f"""
+        SELECT symbol, name_he, last_price, currency, market_cap, trailing_pe, price_to_book,
+               return_ytd_pct, return_1q_pct, return_1y_pct, fifty_two_week_low, fifty_two_week_high,
+               fundamentals_updated_ts
+        FROM companies
+        WHERE symbol IN ({placeholders})
+        ORDER BY symbol
+        """,
+        syms,
+    )
+    lines: list[str] = ["נתוני שוק (Yahoo Finance; עשויים להיות בעיכוב או שגויים):", ""]
+    for r in cur.fetchall():
+        lines.append(
+            f"- {r['symbol']} ({r['name_he']}): מחיר={r['last_price']} {r['currency'] or ''}; "
+            f"שווי שוק~{r['market_cap']}; P/E טריילינג~{r['trailing_pe']}; P/B~{r['price_to_book']}; "
+            f"תשואה שנתית~{r['return_1y_pct']}% תלת־חודשית~{r['return_1q_pct']}% YTD~{r['return_ytd_pct']}% ; "
+            f"52שבוע נמוך/גבוה={r['fifty_two_week_low']}/{r['fifty_two_week_high']} ; עדכון={r['fundamentals_updated_ts']}"
+        )
+    return "\n".join(lines)
 
 
 def recent_knowledge_for_prompt(conn: sqlite3.Connection, *, limit: int = 60) -> str:
@@ -298,4 +400,5 @@ def finalize_open_trade_outcomes(
 def open_db(db_path: str) -> sqlite3.Connection:
     conn = connect(db_path)
     init_schema(conn)
+    ensure_company_fundamentals_columns(conn)
     return conn

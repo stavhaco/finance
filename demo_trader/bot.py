@@ -10,6 +10,7 @@ from typing import Any
 from demo_trader.benchmark import compute_performance, ensure_session
 from demo_trader.config import Config
 from demo_trader.db import (
+    companies_fundamentals_digest,
     finalize_open_trade_outcomes,
     insert_cycle,
     insert_decision,
@@ -17,9 +18,10 @@ from demo_trader.db import (
     recent_knowledge_for_prompt,
     upsert_companies,
 )
-from demo_trader.knowledge_ingest import ingest_headlines
+from demo_trader.fundamentals import refresh_watchlist_fundamentals
+from demo_trader.knowledge_ingest import ingest_headlines, ingest_maya_rows
 from demo_trader.market_data import fetch_last_prices, prices_map
-from demo_trader.maya_stub import build_maya_digest
+from demo_trader.maya_client import maya_digest_for_prompt, normalize_maya_items
 from demo_trader.news_feeds import fetch_headlines, headlines_digest, mock_headlines
 from demo_trader.ollama_client import build_hebrew_trader_prompt, chat_json
 from demo_trader.paper_broker import Quote, execute_trade, portfolio_nav
@@ -69,6 +71,7 @@ def run_cycle(cfg: Config) -> int:
         conn,
         ((c.symbol, c.name_he, c.name_en, c.sector_he, c.category_he) for c in TA35_COMPANIES),
     )
+    refresh_watchlist_fundamentals(conn, list(cfg.watchlist))
 
     path = Path(cfg.state_path)
     state = load_state(path, cfg.starting_cash_ils)
@@ -92,6 +95,15 @@ def run_cycle(cfg: Config) -> int:
         headlines = mock_headlines()
     inserted = ingest_headlines(conn, headlines)
 
+    maya_rows = normalize_maya_items(
+        lookback_days=cfg.maya_lookback_days,
+        breaking_limit=cfg.maya_breaking_limit,
+        post_max_keep=cfg.maya_post_max_keep,
+        timeout_sec=cfg.maya_http_timeout_sec,
+    )
+    maya_inserted = ingest_maya_rows(conn, maya_rows)
+    maya_digest = maya_digest_for_prompt(maya_rows, max_lines=40)
+
     trading_allowed = is_tase_regular_trading_hours()
     news_block = headlines_digest(headlines, max_lines=35)
 
@@ -102,10 +114,13 @@ def run_cycle(cfg: Config) -> int:
 
     knowledge_digest = recent_knowledge_for_prompt(conn, limit=cfg.knowledge_prompt_rows)
     catalog_digest = knowledge_catalog_digest()
-    maya_digest = build_maya_digest()
+    fundamentals_digest = companies_fundamentals_digest(conn, cfg.watchlist)
 
     print("--- cycle ---")
-    print(f"tase_trading_allowed={trading_allowed} | rss_headlines={len(headlines)} | db_new_rows≈{inserted}")
+    print(
+        f"tase_trading_allowed={trading_allowed} | rss_headlines={len(headlines)} | "
+        f"rss_db_new≈{inserted} | maya_rows={len(maya_rows)} maya_db_new≈{maya_inserted}"
+    )
     print(_fmt_perf(perf_pre))
 
     system, user = build_hebrew_trader_prompt(
@@ -113,6 +128,7 @@ def run_cycle(cfg: Config) -> int:
         trading_allowed=trading_allowed,
         catalog_digest=catalog_digest,
         knowledge_digest=knowledge_digest,
+        fundamentals_digest=fundamentals_digest,
         maya_digest=maya_digest,
         quotes_text=_quotes_text(quotes),
         portfolio_text=_portfolio_text(state, prices),
@@ -414,6 +430,10 @@ def main(argv: list[str] | None = None) -> int:
         news_max_headlines=cfg0.news_max_headlines,
         ollama_timeout_sec=cfg0.ollama_timeout_sec,
         knowledge_prompt_rows=cfg0.knowledge_prompt_rows,
+        maya_lookback_days=cfg0.maya_lookback_days,
+        maya_breaking_limit=cfg0.maya_breaking_limit,
+        maya_post_max_keep=cfg0.maya_post_max_keep,
+        maya_http_timeout_sec=cfg0.maya_http_timeout_sec,
     )
 
     if args.once:

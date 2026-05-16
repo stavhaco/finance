@@ -47,6 +47,7 @@ def build_hebrew_trader_prompt(
     trading_allowed: bool,
     catalog_digest: str,
     knowledge_digest: str,
+    fundamentals_digest: str,
     maya_digest: str,
     quotes_text: str,
     portfolio_text: str,
@@ -71,6 +72,9 @@ def build_hebrew_trader_prompt(
 
 מאגר ידע מהרצות קודמות (התאמות כותרות לחברות):
 {knowledge_digest}
+
+נתוני חברות מהמסד (שווי שוק, תשואות הלכה למעשה, מכפילים – Yahoo):
+{fundamentals_digest}
 
 מאיה / דיווחים רשמיים (טקסט מצומצם):
 {maya_digest}
