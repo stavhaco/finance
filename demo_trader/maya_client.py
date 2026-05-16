@@ -84,10 +84,18 @@ class MayaKnowledgeRow:
 
 
 def fetch_breaking_announcements(limit: int, *, timeout_sec: int = 60) -> list[dict[str, Any]]:
+    # API returns 400 if limit is not in 1..5 ("'Limit' חייב להיות בין 1 לבין 5").
+    req_limit = min(5, max(1, int(limit)))
+    if req_limit < int(limit):
+        logger.debug(
+            "Maya breaking-announcement limit capped from %s to %s (API allows at most 5)",
+            limit,
+            req_limit,
+        )
     url = f"{MAYA_BASE}/api/v1/reports/breaking-announcement"
     r = requests.get(
         url,
-        params={"limit": max(1, int(limit))},
+        params={"limit": req_limit},
         headers=_headers("/he/reports/breaking-announcements"),
         timeout=timeout_sec,
     )
