@@ -1,12 +1,17 @@
 from __future__ import annotations
 
+import logging
 import re
 import sqlite3
 
+from demo_trader.config import Config
 from demo_trader.db import insert_knowledge_event
-from demo_trader.time_utils import maya_publish_to_utc_iso, rss_published_to_utc_iso
+from demo_trader.knowledge_enrichment import enrich_knowledge_event_by_id
 from demo_trader.news_feeds import Headline
 from demo_trader.ta35_catalog import TA35_COMPANIES
+from demo_trader.time_utils import maya_publish_to_utc_iso, rss_published_to_utc_iso
+
+logger = logging.getLogger(__name__)
 
 
 def _norm_he(s: str) -> str:
@@ -35,11 +40,11 @@ def match_company(headline: Headline) -> str | None:
     return None
 
 
-def ingest_headlines(conn: sqlite3.Connection, headlines: list[Headline]) -> int:
+def ingest_headlines(conn: sqlite3.Connection, headlines: list[Headline], *, cfg: Config) -> int:
     inserted = 0
     for h in headlines:
         sym = match_company(h)
-        ok = insert_knowledge_event(
+        kid = insert_knowledge_event(
             conn,
             source=h.source,
             url=h.link or h.source,
@@ -48,12 +53,18 @@ def ingest_headlines(conn: sqlite3.Connection, headlines: list[Headline]) -> int
             matched_symbol=sym,
             event_time=rss_published_to_utc_iso(h.published),
         )
-        if ok:
-            inserted += 1
+        if kid is None:
+            continue
+        inserted += 1
+        if cfg.knowledge_enrich_on_ingest:
+            try:
+                enrich_knowledge_event_by_id(conn, kid, cfg)
+            except Exception as e:
+                logger.warning("knowledge enrich failed (rss id=%s): %s", kid, e)
     return inserted
 
 
-def ingest_maya_rows(conn: sqlite3.Connection, rows: list) -> int:
+def ingest_maya_rows(conn: sqlite3.Connection, rows: list, *, cfg: Config) -> int:
     """Persist Maya `MayaKnowledgeRow` items (duck-typed) into knowledge_events."""
     inserted = 0
     for row in rows:
@@ -67,7 +78,7 @@ def ingest_maya_rows(conn: sqlite3.Connection, rows: list) -> int:
         if snippet:
             blob = f"{title} | {snippet}"
         sym = match_company_text(blob)
-        if insert_knowledge_event(
+        kid = insert_knowledge_event(
             conn,
             source=source,
             url=url,
@@ -75,7 +86,13 @@ def ingest_maya_rows(conn: sqlite3.Connection, rows: list) -> int:
             snippet=str(snippet) if snippet is not None else None,
             matched_symbol=sym,
             event_time=maya_publish_to_utc_iso(getattr(row, "publish_raw", None)),
-        ):
-            inserted += 1
+        )
+        if kid is None:
+            continue
+        inserted += 1
+        if cfg.knowledge_enrich_on_ingest:
+            try:
+                enrich_knowledge_event_by_id(conn, kid, cfg)
+            except Exception as e:
+                logger.warning("knowledge enrich failed (maya id=%s): %s", kid, e)
     return inserted
-

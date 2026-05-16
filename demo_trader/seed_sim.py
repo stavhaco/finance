@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from dataclasses import replace
 
 from demo_trader.config import Config
 from demo_trader.db import open_db, upsert_companies
@@ -18,9 +19,13 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--force-bars", action="store_true", help="Re-run yfinance backfill even if done today (IL).")
     p.add_argument("--rss", action="store_true", help="Also fetch RSS headlines into the knowledge table.")
     p.add_argument("--maya-lookback-days", type=int, default=None, help="Override DEMO_TRADER_MAYA_LOOKBACK_DAYS for this run.")
+    p.add_argument("--no-enrich", action="store_true", help="Skip per-row LLM enrichment during ingest (use backfill_knowledge later).")
     args = p.parse_args(argv)
 
     cfg = Config()
+    if args.no_enrich:
+        cfg = replace(cfg, knowledge_enrich_on_ingest=False)
+
     lookback = args.maya_lookback_days if args.maya_lookback_days is not None else max(cfg.maya_lookback_days, cfg.price_history_days + 5)
 
     conn = open_db(cfg.db_path)
@@ -44,12 +49,12 @@ def main(argv: list[str] | None = None) -> int:
         post_max_keep=cfg.maya_post_max_keep,
         timeout_sec=cfg.maya_http_timeout_sec,
     )
-    n_maya = ingest_maya_rows(conn, maya_rows)
+    n_maya = ingest_maya_rows(conn, maya_rows, cfg=cfg)
     print(f"Maya: fetched={len(maya_rows)} inserted_or_new≈{n_maya}")
 
     if args.rss:
         headlines = fetch_headlines(cfg.rss_feeds(), cfg.news_max_headlines)
-        n_rss = ingest_headlines(conn, headlines)
+        n_rss = ingest_headlines(conn, headlines, cfg=cfg)
         print(f"RSS: headlines={len(headlines)} inserted_or_new≈{n_rss}")
 
     return 0

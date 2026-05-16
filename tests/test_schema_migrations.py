@@ -54,6 +54,24 @@ class TestSchemaMigrations(unittest.TestCase):
             self.assertIn("event_time", cols)
             conn.close()
 
+    def test_migration_003_knowledge_enrichment_columns(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "k3.db")
+            conn = open_db(path, announce_migrations=False)
+            cur = conn.execute("PRAGMA table_info(knowledge_events)")
+            cols = {str(r[1]) for r in cur.fetchall()}
+            for c in (
+                "title_en",
+                "body_translation_en",
+                "executive_summary_en",
+                "sentiment",
+                "trade_usefulness",
+                "is_broad_market",
+                "enrichment_status",
+            ):
+                self.assertIn(c, cols)
+            conn.close()
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -11,9 +11,9 @@ from typing import Any
 
 from demo_trader.benchmark import compute_performance, ensure_session
 from demo_trader.config import Config
-from demo_trader.content_enrich import build_article_context_en
 from demo_trader.db import (
     companies_fundamentals_digest,
+    trader_knowledge_digest_en,
     finalize_open_trade_outcomes,
     insert_cycle,
     insert_decision,
@@ -182,7 +182,7 @@ def run_cycle(cfg: Config) -> int:
         headlines = fetch_headlines(cfg.rss_feeds(), cfg.news_max_headlines)
         if not headlines:
             headlines = mock_headlines()
-        inserted = ingest_headlines(conn, headlines)
+        inserted = ingest_headlines(conn, headlines, cfg=cfg)
 
         maya_rows = normalize_maya_items(
             lookback_days=cfg.maya_lookback_days,
@@ -190,7 +190,7 @@ def run_cycle(cfg: Config) -> int:
             post_max_keep=cfg.maya_post_max_keep,
             timeout_sec=cfg.maya_http_timeout_sec,
         )
-        maya_inserted = ingest_maya_rows(conn, maya_rows)
+        maya_inserted = ingest_maya_rows(conn, maya_rows, cfg=cfg)
 
     if cfg.simulation and not cfg.sim_ingest_live:
         maya_digest = (
@@ -237,25 +237,15 @@ def run_cycle(cfg: Config) -> int:
     )
     print(_fmt_perf(perf_pre))
 
-    if cfg.simulation and not cfg.sim_ingest_live:
-        article_context_en = ""
-    elif cfg.enrich_article_urls:
-        h_src = (
-            _filter_headlines_for_sim(headlines, sim_now)
-            if (cfg.simulation and sim_now is not None)
-            else headlines
-        )
-        m_src = (
-            _filter_maya_rows_for_sim(maya_rows, sim_now)
-            if (cfg.simulation and sim_now is not None)
-            else maya_rows
-        )
-        article_context_en = build_article_context_en(cfg, h_src, m_src)
-    else:
-        article_context_en = ""
-
-    if article_context_en:
-        print(f"article_context_en: {len(article_context_en)} chars", flush=True)
+    article_context_en = trader_knowledge_digest_en(
+        conn,
+        benchmark_symbol=cfg.benchmark_symbol,
+        limit=cfg.knowledge_trader_digest_limit,
+        as_of_utc=sim_now if cfg.simulation else None,
+        translation_snippet_chars=cfg.knowledge_trader_digest_excerpt_chars,
+    )
+    if article_context_en and not article_context_en.startswith("(No enriched"):
+        print(f"knowledge_digest_en: {len(article_context_en)} chars", flush=True)
 
     system, user = build_hebrew_trader_prompt(
         watchlist=cfg.watchlist,

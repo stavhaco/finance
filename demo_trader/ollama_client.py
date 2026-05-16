@@ -41,6 +41,64 @@ def chat_json(
     return json.loads(raw)
 
 
+def chat_json_schema(
+    *,
+    base_url: str,
+    model: str,
+    system: str,
+    user: str,
+    timeout_sec: int,
+    schema: dict[str, Any],
+) -> dict[str, Any]:
+    url = base_url.rstrip("/") + "/api/chat"
+    payload = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
+        ],
+        "stream": False,
+        "format": schema,
+    }
+    r = requests.post(url, json=payload, timeout=timeout_sec)
+    r.raise_for_status()
+    data = r.json()
+    content = (data.get("message") or {}).get("content") or ""
+    raw = _strip_json_fence(str(content))
+    return json.loads(raw)
+
+
+def chat_json_schema_or_fallback(
+    *,
+    base_url: str,
+    model: str,
+    system: str,
+    user: str,
+    timeout_sec: int,
+    schema: dict[str, Any],
+) -> dict[str, Any]:
+    try:
+        return chat_json_schema(
+            base_url=base_url,
+            model=model,
+            system=system,
+            user=user,
+            timeout_sec=timeout_sec,
+            schema=schema,
+        )
+    except Exception:
+        strict = system + "\n\nReturn JSON only with keys: title_en, translation_en, executive_summary_en, sentiment, trade_usefulness, is_broad_market. No markdown."
+        u = user + "\n\nOutput JSON object only."
+        return chat_json(
+            base_url=base_url,
+            model=model,
+            system=strict,
+            user=u,
+            timeout_sec=timeout_sec,
+        )
+
+
+
 def chat_plain(
     *,
     base_url: str,
@@ -136,7 +194,7 @@ def build_hebrew_trader_prompt(
 כותרות חדשות (RSS, בעברית ככל האפשר):
 {news_text}
 
-Article bodies (English; fetched from URLs where allowed; excerpt may be incomplete):
+Enriched knowledge center (English; full translation + executive summary stored in SQLite; excerpt shown):
 {article_context_en or "(none)"}
 
 החזר JSON בצורה:

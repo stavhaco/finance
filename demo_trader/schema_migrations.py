@@ -14,7 +14,7 @@ def _utc_iso() -> str:
 
 
 # Bump when adding a new migration at the bottom of MIGRATIONS.
-EXPECTED_LATEST_VERSION: int = 2
+EXPECTED_LATEST_VERSION: int = 3
 
 
 def ensure_migrations_table(conn: sqlite3.Connection) -> None:
@@ -102,6 +102,30 @@ def _upgrade_002_simulation_bars_and_event_times(conn: sqlite3.Connection) -> No
     conn.execute("CREATE INDEX IF NOT EXISTS idx_knowledge_events_event_time ON knowledge_events(event_time);")
     conn.commit()
 
+def _upgrade_003_knowledge_enrichment(conn: sqlite3.Connection) -> None:
+    """English enrichment fields for knowledge_events (translate/summary/sentiment)."""
+    cur = conn.execute("PRAGMA table_info(knowledge_events)")
+    have = {str(r[1]) for r in cur.fetchall()}
+    additions: tuple[tuple[str, str], ...] = (
+        ("title_en", "TEXT"),
+        ("body_translation_en", "TEXT"),
+        ("executive_summary_en", "TEXT"),
+        ("sentiment", "TEXT"),
+        ("trade_usefulness", "TEXT"),
+        ("is_broad_market", "INTEGER NOT NULL DEFAULT 0"),
+        ("enrichment_status", "TEXT"),
+        ("enrichment_error", "TEXT"),
+        ("enriched_at", "TEXT"),
+    )
+    for col, typ in additions:
+        if col in have:
+            continue
+        conn.execute(f"ALTER TABLE knowledge_events ADD COLUMN {col} {typ}")
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_knowledge_enrich_status ON knowledge_events(enrichment_status);"
+    )
+    conn.commit()
+
 def _upgrade_001_company_fundamentals(conn: sqlite3.Connection) -> None:
     """Add Yahoo/fundamental analytics columns to `companies` (idempotent per column)."""
     cur = conn.execute("PRAGMA table_info(companies)")
@@ -118,6 +142,7 @@ MigrationFn = Callable[[sqlite3.Connection], None]
 MIGRATIONS: Sequence[tuple[int, str, MigrationFn]] = (
     (1, "001_company_fundamentals", _upgrade_001_company_fundamentals),
     (2, "002_simulation_bars_and_event_times", _upgrade_002_simulation_bars_and_event_times),
+    (3, "003_knowledge_enrichment", _upgrade_003_knowledge_enrichment),
 )
 
 

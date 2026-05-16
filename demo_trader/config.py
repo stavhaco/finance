@@ -118,6 +118,26 @@ class Config:
         default_factory=lambda: max(500, _env_int("DEMO_TRADER_ENRICH_TRANSLATE_MAX_INPUT_CHARS", 10_000))
     )
     ollama_translate_model: str | None = field(default_factory=lambda: _env_opt_str("DEMO_TRADER_OLLAMA_TRANSLATE_MODEL"))
+    knowledge_enrich_on_ingest: bool = field(
+        default_factory=lambda: _env_bool("DEMO_TRADER_KNOWLEDGE_ENRICH_ON_INGEST", True)
+    )
+    knowledge_enrich_fetch_body: bool = field(
+        default_factory=lambda: _env_bool("DEMO_TRADER_KNOWLEDGE_ENRICH_FETCH_BODY", True)
+    )
+    ollama_enrichment_model: str | None = field(default_factory=lambda: _env_opt_str("DEMO_TRADER_OLLAMA_ENRICHMENT_MODEL"))
+    knowledge_enrich_timeout_sec: int = field(
+        default_factory=lambda: max(60, _env_int("DEMO_TRADER_KNOWLEDGE_ENRICH_TIMEOUT_SEC", 300))
+    )
+    knowledge_enrich_max_body_chars: int = field(
+        default_factory=lambda: max(2000, _env_int("DEMO_TRADER_KNOWLEDGE_ENRICH_MAX_BODY_CHARS", 14_000))
+    )
+    knowledge_trader_digest_limit: int = field(
+        default_factory=lambda: max(5, _env_int("DEMO_TRADER_KNOWLEDGE_TRADER_DIGEST_LIMIT", 40))
+    )
+    knowledge_trader_digest_excerpt_chars: int = field(
+        default_factory=lambda: max(200, _env_int("DEMO_TRADER_KNOWLEDGE_DIGEST_EXCERPT_CHARS", 600))
+    )
+
     enrich_url_host_suffixes: tuple[str, ...] | None = field(default_factory=_enrich_url_host_suffixes)
 
     sim_skip_closed_hours: bool = field(

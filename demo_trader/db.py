@@ -122,9 +122,9 @@ def insert_knowledge_event(
     snippet: str | None,
     matched_symbol: str | None,
     event_time: str | None = None,
-) -> bool:
+) -> int | None:
     try:
-        conn.execute(
+        cur = conn.execute(
             """
             INSERT INTO knowledge_events(ts, event_time, source, url, title, snippet, matched_symbol)
             VALUES(?,?,?,?,?,?,?)
@@ -132,9 +132,9 @@ def insert_knowledge_event(
             (_utc_iso(), event_time, source, url, title, snippet, matched_symbol),
         )
         conn.commit()
-        return True
+        return int(cur.lastrowid)
     except sqlite3.IntegrityError:
-        return False
+        return None
 
 
 def update_company_fundamentals(conn: sqlite3.Connection, stats: dict[str, Any]) -> None:
@@ -255,6 +255,97 @@ def recent_knowledge_for_prompt(
         when = r["event_time"] or r["ts"]
         lines.append(f"- [{when}] {r['source']} | {sym} | {r['title']}")
     return "אירועי ידע אחרונים מהרצות קודמות (ממוין מהחדש לישן):\n" + "\n".join(lines)
+
+
+def get_knowledge_event_by_id(conn: sqlite3.Connection, row_id: int) -> dict[str, Any] | None:
+    cur = conn.execute("SELECT * FROM knowledge_events WHERE id=?", (int(row_id),))
+    r = cur.fetchone()
+    return dict(r) if r else None
+
+
+def update_knowledge_enrichment(conn: sqlite3.Connection, row_id: int, **fields: Any) -> None:
+    if not fields:
+        return
+    cols = [f"{k}=?" for k in fields]
+    vals = list(fields.values())
+    cols.append("enriched_at=?")
+    vals.append(_utc_iso())
+    vals.append(int(row_id))
+    conn.execute(f"UPDATE knowledge_events SET {', '.join(cols)} WHERE id=?", vals)
+    conn.commit()
+
+
+def trader_knowledge_digest_en(
+    conn: sqlite3.Connection,
+    *,
+    benchmark_symbol: str,
+    limit: int = 40,
+    as_of_utc: datetime | None = None,
+    translation_snippet_chars: int = 600,
+) -> str:
+    """English trader-facing digest: TA-35-relevant rows, high usefulness, or broad market (must be enrichment_status=ok)."""
+    from demo_trader.ta35_catalog import ta35_symbols
+
+    syms = list(dict.fromkeys([*ta35_symbols(), benchmark_symbol]))
+    placeholders = ",".join(["?"] * len(syms))
+    if as_of_utc is None:
+        cur = conn.execute(
+            f"""
+            SELECT ts, event_time, source, matched_symbol, title_en, body_translation_en,
+                   executive_summary_en, sentiment, trade_usefulness, is_broad_market
+            FROM knowledge_events
+            WHERE enrichment_status = 'ok'
+              AND (
+                    matched_symbol IN ({placeholders})
+                 OR trade_usefulness = 'high'
+                 OR is_broad_market = 1
+              )
+            ORDER BY datetime(COALESCE(event_time, ts)) DESC
+            LIMIT ?
+            """,
+            (*syms, int(limit)),
+        )
+    else:
+        as_iso = as_of_utc.astimezone(timezone.utc).replace(microsecond=0).isoformat()
+        cur = conn.execute(
+            f"""
+            SELECT ts, event_time, source, matched_symbol, title_en, body_translation_en,
+                   executive_summary_en, sentiment, trade_usefulness, is_broad_market
+            FROM knowledge_events
+            WHERE enrichment_status = 'ok'
+              AND (COALESCE(event_time, ts) <= ?)
+              AND (
+                    matched_symbol IN ({placeholders})
+                 OR trade_usefulness = 'high'
+                 OR is_broad_market = 1
+              )
+            ORDER BY datetime(COALESCE(event_time, ts)) DESC
+            LIMIT ?
+            """,
+            (as_iso, *syms, int(limit)),
+        )
+
+    rows = cur.fetchall()
+    if not rows:
+        return "(No enriched knowledge_events yet for TA-35 / broad / high-usefulness filters — run backfill or wait for ingest enrichment.)"
+    lines: list[str] = ["Enriched knowledge (English; stored in DB):", ""]
+    for r in rows:
+        sym = r["matched_symbol"] or "—"
+        when = r["event_time"] or r["ts"]
+        title_en = (r["title_en"] or "").strip() or "(no title_en)"
+        summary = (r["executive_summary_en"] or "").strip() or "(no summary)"
+        body = (r["body_translation_en"] or "").strip()
+        ex = body[: max(0, int(translation_snippet_chars))].rstrip()
+        if len(body) > len(ex):
+            ex += "..."
+        lines.append(
+            f"- [{when}] {r['source']} | {sym} | usefulness={r['trade_usefulness']} | "
+            f"sentiment={r['sentiment']} | broad_market={int(r['is_broad_market'] or 0)}\n"
+            f"  title_en: {title_en}\n"
+            f"  executive_summary_en: {summary}\n"
+            f"  translation_en_excerpt: {ex or '(empty)'}"
+        )
+    return "\n".join(lines)
 
 
 def insert_cycle(
