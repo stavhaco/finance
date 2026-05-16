@@ -4,7 +4,7 @@ This repository contains an **educational** paper-trading loop (not investment a
 
 ## Architecture
 
-End-to-end flow (RSS → knowledge DB → Ollama → paper trades → Telegram summary) with diagrams:
+End-to-end flow with plain-language glossary (cycle, paper broker, RSS, `paper_state.json`, `trader.db`) and diagrams:
 
 **[docs/SYSTEM_FLOW.md](docs/SYSTEM_FLOW.md)**
 
