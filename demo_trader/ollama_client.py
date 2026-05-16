@@ -41,44 +41,73 @@ def chat_json(
     return json.loads(raw)
 
 
-def build_prompt(
+def build_hebrew_trader_prompt(
     *,
     watchlist: tuple[str, ...],
+    trading_allowed: bool,
+    catalog_digest: str,
+    knowledge_digest: str,
+    maya_digest: str,
     quotes_text: str,
     portfolio_text: str,
     news_text: str,
     max_trades: int,
 ) -> tuple[str, str]:
     system = (
-        "You are a cautious paper-trading research assistant for Israeli equities (Yahoo .TA symbols). "
-        "You must output ONLY valid JSON (no markdown). "
-        "You do not have order-book data: treat 'arbitrage' as relative-value hypotheses between names in the watchlist, "
-        "not guaranteed profit. Never invent symbols outside the watchlist."
+        "אתה סוחר ניירות (paper trading) זהיר בשוק הישראלי. "
+        "עליך להחזיר JSON בלבד (בלי markdown). "
+        "המטרה: להשוות ביצועים למדד ת\"א-35 (פרוקסי דרך Yahoo Finance). "
+        "אין לך ספר פקודות אמיתי; אל תבטיח רווחים. "
+        "השתמש בעברית בשדות rationale/analysis/reason."
     )
-    user = f"""Watchlist (only trade these exact symbols): {list(watchlist)}
+    gate = "כן" if trading_allowed else "לא"
+    user = f"""האם כרגע מותר לבצע פעולות מסחר (חלון מסחר פשוט בת\"א)? {gate}
 
-Market snapshot:
+סביבת מניות (רק סימולים אלה מותרים לפעולות קנייה/מכירה):
+{list(watchlist)}
+
+קטלוג וקטגוריות TA-35 (מאגר ידע בסיסי):
+{catalog_digest}
+
+מאגר ידע מהרצות קודמות (התאמות כותרות לחברות):
+{knowledge_digest}
+
+מאיה / דיווחים רשמיים (טקסט מצומצם):
+{maya_digest}
+
+תמונת מחירים (Yahoo, עשוי להיות בעיכוב):
 {quotes_text}
 
-Portfolio:
+תיק נוכחי:
 {portfolio_text}
 
-News / headlines context:
+כותרות חדשות (RSS, בעברית ככל האפשר):
 {news_text}
 
-Return JSON with this shape:
+החזר JSON בצורה:
 {{
-  "analysis": "short reasoning in English or Hebrew",
-  "relative_value_notes": "optional cross-name comparisons; may be empty string",
+  "analysis_he": "ניתוח קצר",
+  "by_symbol": [
+    {{
+      "symbol": "TEVA.TA",
+      "stance": "buy|sell|hold",
+      "buy_lo": null,
+      "buy_hi": null,
+      "sell_lo": null,
+      "sell_hi": null,
+      "rationale_he": "הסבר קצר"
+    }}
+  ],
   "trades": [
-    {{"symbol": "TEVA.TA", "side": "buy", "qty": 10, "reason": "..."}}
+    {{"symbol": "TEVA.TA", "side": "buy", "qty": 10, "reason_he": "..."}}
   ]
 }}
 
-Rules:
-- trades array length <= {max_trades}
-- qty must be a positive number (fractional shares allowed for ETFs like TA35.TA; otherwise prefer whole shares)
-- side is only "buy" or "sell"
-- If no good action, return an empty trades array
+חוקים:
+- trades: לכל היותר {max_trades} עסקאות
+- אם stance הוא hold לכל השמות, מותר שמערך העסקאות יהיה ריק
+- אם אסור מסחר כרגע (לא), החזר trades ריק בכל מקרה, אבל עדיין מלא analysis_he ו-by_symbol
+- side רק buy או sell
+- qty חיובי
 """
     return system, user
