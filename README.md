@@ -34,6 +34,30 @@ Defaults:
 - TASE **holiday calendar** is not modeled; the trading gate is intentionally conservative and simple.
 - RSS scraping should respect publisher terms; prefer licensed feeds where possible.
 
+## Telegram daily summary
+
+Send a daily message with **buy/sell actions and reasons**, plus **unrealized/realized P&L per holding**.
+
+1. Create a bot via [@BotFather](https://t.me/BotFather) and obtain `TELEGRAM_BOT_TOKEN`.
+2. Get your `TELEGRAM_CHAT_ID` (e.g. message [@userinfobot](https://t.me/userinfobot) or use `getUpdates` after messaging your bot).
+3. Enable and run:
+
+```bash
+export DEMO_TRADER_TELEGRAM_ENABLED=1
+export TELEGRAM_BOT_TOKEN=...
+export TELEGRAM_CHAT_ID=...
+python -m demo_trader --daily-report          # send now
+python -m demo_trader --daily-report --dry-run  # preview in stdout
+```
+
+When the bot loop is running, it also sends **once per Israel calendar day** after `17:36` (configurable via `DEMO_TRADER_TELEGRAM_DAILY_HOUR` / `DEMO_TRADER_TELEGRAM_DAILY_MINUTE`).
+
+Cron alternative at market close:
+
+```bash
+45 17 * * 0-4 cd /path/to/finance && DEMO_TRADER_TELEGRAM_ENABLED=1 python -m demo_trader.daily_report
+```
+
 ## Tests
 
 ```bash

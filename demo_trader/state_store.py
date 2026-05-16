@@ -37,6 +37,7 @@ class PaperState:
     trades: list[dict[str, Any]] = field(default_factory=list)
     session: SessionSnapshot | None = None
     last_cycle_ts: str | None = None
+    last_daily_report_il_date: str | None = None
 
     def to_json_dict(self) -> dict[str, Any]:
         d: dict[str, Any] = {
@@ -44,6 +45,7 @@ class PaperState:
             "positions": self.positions,
             "trades": self.trades,
             "last_cycle_ts": self.last_cycle_ts,
+            "last_daily_report_il_date": self.last_daily_report_il_date,
         }
         if self.session:
             d["session"] = asdict(self.session)
@@ -66,6 +68,7 @@ class PaperState:
             trades=list(raw.get("trades") or []),
             session=session,
             last_cycle_ts=raw.get("last_cycle_ts"),
+            last_daily_report_il_date=raw.get("last_daily_report_il_date"),
         )
 
 

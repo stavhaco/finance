@@ -25,6 +25,7 @@ from demo_trader.ollama_client import build_hebrew_trader_prompt, chat_json
 from demo_trader.paper_broker import Quote, execute_trade, portfolio_nav
 from demo_trader.state_store import _utc_now_iso, load_state, save_state
 from demo_trader.ta35_catalog import TA35_COMPANIES, knowledge_catalog_digest
+from demo_trader.daily_report import maybe_send_scheduled_daily_report
 from demo_trader.tase_calendar import is_tase_regular_trading_hours
 
 
@@ -385,6 +386,13 @@ def run_cycle(cfg: Config) -> int:
     state.last_cycle_ts = _utc_now_iso()
     save_state(path, state)
 
+    try:
+        if maybe_send_scheduled_daily_report(cfg, state, path):
+            save_state(path, state)
+            print("telegram: daily summary sent")
+    except Exception as e:
+        print(f"WARN: telegram daily report failed: {e}", file=sys.stderr)
+
     print(f"executed trades this cycle: {executed}")
     print("after trades:", _fmt_perf(perf_post))
     print(f"sqlite db: {cfg.db_path} (cycle_id={cycle_id})")
@@ -394,6 +402,12 @@ def run_cycle(cfg: Config) -> int:
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description="TA-35 paper trader with Hebrew context, SQLite audit log, and Ollama.")
     p.add_argument("--once", action="store_true", help="Run a single cycle then exit.")
+    p.add_argument(
+        "--daily-report",
+        action="store_true",
+        help="Send daily Telegram summary (or print with --dry-run) and exit.",
+    )
+    p.add_argument("--dry-run", action="store_true", help="With --daily-report, print report instead of Telegram.")
     p.add_argument("--interval-minutes", type=int, default=None, help="Override DEMO_TRADER_INTERVAL_MINUTES.")
     p.add_argument("--model", type=str, default=None, help="Override OLLAMA_MODEL.")
     args = p.parse_args(argv)
@@ -414,7 +428,23 @@ def main(argv: list[str] | None = None) -> int:
         news_max_headlines=cfg0.news_max_headlines,
         ollama_timeout_sec=cfg0.ollama_timeout_sec,
         knowledge_prompt_rows=cfg0.knowledge_prompt_rows,
+        telegram_enabled=cfg0.telegram_enabled,
+        telegram_bot_token=cfg0.telegram_bot_token,
+        telegram_chat_id=cfg0.telegram_chat_id,
+        telegram_timeout_sec=cfg0.telegram_timeout_sec,
+        telegram_daily_hour=cfg0.telegram_daily_hour,
+        telegram_daily_minute=cfg0.telegram_daily_minute,
     )
+
+    if args.daily_report:
+        from demo_trader.daily_report import send_daily_report
+
+        text = send_daily_report(cfg, dry_run=args.dry_run)
+        if args.dry_run:
+            print(text)
+        else:
+            print("daily report sent to Telegram")
+        return 0
 
     if args.once:
         return run_cycle(cfg)
