@@ -1,5 +1,8 @@
 # System flow — TA-35 paper trader
 
+> **Business / presentation style:** [BUSINESS_OVERVIEW.md](BUSINESS_OVERVIEW.md) — non-technical diagrams and slide-style narrative.  
+> **This document:** technical detail for developers (files, modules, cycles).
+
 Educational bot that **pretends** to trade Israeli large-cap stocks (Tel Aviv, symbols like `TEVA.TA`). It reads news, asks a local AI for opinions, updates a **fake portfolio** on disk, and can text you a daily summary on Telegram.
 
 > **Not investment advice.** Money is simulated — nothing is sent to a real bank or broker.
