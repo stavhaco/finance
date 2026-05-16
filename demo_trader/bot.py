@@ -6,6 +6,7 @@ import time
 import traceback
 from dataclasses import replace
 from pathlib import Path
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from demo_trader.benchmark import compute_performance, ensure_session
@@ -27,11 +28,16 @@ from demo_trader.maya_client import maya_digest_for_prompt, normalize_maya_items
 from demo_trader.news_feeds import fetch_headlines, headlines_digest, mock_headlines
 from demo_trader.ollama_client import build_hebrew_trader_prompt, chat_json
 from demo_trader.paper_broker import Quote, execute_trade, portfolio_nav
-from demo_trader.sim_clock import bump_sim_minutes, load_sim_now
+from demo_trader.sim_clock import advance_sim_now, load_sim_now
 from demo_trader.state_store import _utc_now_iso, load_state, save_state
 from demo_trader.ta35_catalog import TA35_COMPANIES, knowledge_catalog_digest
-from demo_trader.tase_calendar import is_tase_regular_trading_hours
-from demo_trader.time_utils import parse_sim_start_iso, sim_default_start_utc
+from demo_trader.tase_calendar import is_tase_regular_trading_hours, next_tase_regular_session_open_utc
+from demo_trader.time_utils import (
+    maya_publish_to_utc_iso,
+    parse_sim_start_iso,
+    rss_published_to_utc_iso,
+    sim_default_start_utc,
+)
 
 
 def _fmt_perf(p) -> str:
@@ -73,6 +79,38 @@ def _quotes_from_price_map(px: dict[str, float]) -> dict[str, Quote]:
     return {s: Quote(symbol=s, last=float(p), currency="ILS") for s, p in px.items()}
 
 
+def _event_utciso_le_sim(iso: str | None, sim_now: datetime) -> bool:
+    if not iso:
+        return False
+    try:
+        et = datetime.fromisoformat(str(iso).replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    if et.tzinfo is None:
+        et = et.replace(tzinfo=timezone.utc)
+    sim_u = sim_now.astimezone(timezone.utc).replace(microsecond=0)
+    return et.astimezone(timezone.utc).replace(microsecond=0) <= sim_u
+
+
+def _filter_maya_rows_for_sim(rows: list, sim_now: datetime) -> list:
+    out: list = []
+    for r in rows:
+        iso = maya_publish_to_utc_iso(getattr(r, "publish_raw", None))
+        if _event_utciso_le_sim(iso, sim_now):
+            out.append(r)
+    return out
+
+
+def _filter_headlines_for_sim(headlines: list, sim_now: datetime) -> list:
+    out: list = []
+    for h in headlines:
+        iso = rss_published_to_utc_iso(h.published)
+        if _event_utciso_le_sim(iso, sim_now):
+            out.append(h)
+    return out
+
+
+
 def run_cycle(cfg: Config) -> int:
     conn = open_db(cfg.db_path)
     upsert_companies(
@@ -102,7 +140,14 @@ def run_cycle(cfg: Config) -> int:
         fallback_start = sim_default_start_utc(days_ago=cfg.sim_start_days_ago)
         default_start = parse_sim_start_iso(cfg.sim_start_iso, fallback_start=fallback_start)
         sim_now = load_sim_now(conn, default_start=default_start)
-        sim_ts_label = sim_now.replace(microsecond=0).isoformat()
+        if cfg.sim_skip_closed_hours and cfg.enforce_tase_hours:
+            snapped = next_tase_regular_session_open_utc(sim_now)
+            sim_u = sim_now.astimezone(timezone.utc).replace(microsecond=0)
+            if snapped != sim_u:
+                advance_sim_now(conn, new_now=snapped)
+                sim_now = snapped
+        sim_now = sim_now.astimezone(timezone.utc).replace(microsecond=0)
+        sim_ts_label = sim_now.isoformat()
         px_map = quotes_from_bars(
             conn,
             symbols=sorted(symbols),
@@ -132,12 +177,6 @@ def run_cycle(cfg: Config) -> int:
         inserted = 0
         maya_rows = []
         maya_inserted = 0
-        maya_digest = (
-            "(סימולציה: ללא מאיה חיה; משתמשים בידע שכבר נשמר במסד הנתונים עד זמן הסימולציה)"
-        )
-        news_block = (
-            "(סימולציה: ללא RSS חי; משתמשים בידע שכבר נשמר במסד הנתונים עד זמן הסימולציה)"
-        )
     else:
         headlines = fetch_headlines(cfg.rss_feeds(), cfg.news_max_headlines)
         if not headlines:
@@ -151,6 +190,16 @@ def run_cycle(cfg: Config) -> int:
             timeout_sec=cfg.maya_http_timeout_sec,
         )
         maya_inserted = ingest_maya_rows(conn, maya_rows)
+
+    if cfg.simulation and not cfg.sim_ingest_live:
+        maya_digest = (
+            "(סימולציה: ללא מאיה/RSS חיה; משתמשים בידע שכבר נשמר במסד הנתונים עד זמן הסימולציה)"
+        )
+        news_block = maya_digest
+    elif cfg.simulation and sim_now is not None:
+        maya_digest = maya_digest_for_prompt(_filter_maya_rows_for_sim(maya_rows, sim_now), max_lines=40)
+        news_block = headlines_digest(_filter_headlines_for_sim(headlines, sim_now), max_lines=35)
+    else:
         maya_digest = maya_digest_for_prompt(maya_rows, max_lines=40)
         news_block = headlines_digest(headlines, max_lines=35)
 
@@ -177,7 +226,8 @@ def run_cycle(cfg: Config) -> int:
     if cfg.simulation and sim_now is not None:
         print(
             f"SIMULATION sim_now_utc={sim_now.isoformat()} | step={cfg.sim_step_minutes}m | "
-            f"bars={cfg.price_bar_interval} | ingest_live={cfg.sim_ingest_live}"
+            f"bars={cfg.price_bar_interval} | ingest_live={cfg.sim_ingest_live} | "
+            f"skip_closed={cfg.sim_skip_closed_hours}"
         )
     print(
         f"tase_trading_allowed={trading_allowed} (enforce_hours={cfg.enforce_tase_hours}) | "
@@ -418,7 +468,11 @@ def run_cycle(cfg: Config) -> int:
 
     syms_end = sorted(set(cfg.watchlist) | set(state.positions.keys()) | {cfg.benchmark_symbol})
     if cfg.simulation and sim_now is not None:
-        sim_after = bump_sim_minutes(conn, sim_now=sim_now, step_minutes=cfg.sim_step_minutes)
+        sim_after = sim_now + timedelta(minutes=max(1, int(cfg.sim_step_minutes)))
+        sim_after = sim_after.astimezone(timezone.utc).replace(microsecond=0)
+        if cfg.sim_skip_closed_hours and cfg.enforce_tase_hours:
+            sim_after = next_tase_regular_session_open_utc(sim_after)
+        advance_sim_now(conn, new_now=sim_after)
         px_end = quotes_from_bars(
             conn,
             symbols=syms_end,

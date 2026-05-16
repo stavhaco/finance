@@ -1,11 +1,15 @@
 import os
 import tempfile
 import unittest
-from datetime import datetime
+from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
 from demo_trader.db import init_schema, insert_cycle, insert_decision, open_db, upsert_companies
-from demo_trader.tase_calendar import is_tase_regular_trading_hours, is_tase_weekday_il
+from demo_trader.tase_calendar import (
+    is_tase_regular_trading_hours,
+    is_tase_weekday_il,
+    next_tase_regular_session_open_utc,
+)
 
 
 class TestDb(unittest.TestCase):
@@ -59,6 +63,22 @@ class TestTaseCalendar(unittest.TestCase):
         dt = datetime(2026, 5, 17, 10, 30, tzinfo=ZoneInfo("Asia/Jerusalem"))
         self.assertTrue(is_tase_weekday_il(dt))
         self.assertTrue(is_tase_regular_trading_hours(dt))
+
+
+
+    def test_next_open_after_thursday_evening(self) -> None:
+        il = ZoneInfo("Asia/Jerusalem")
+        thu_after_close = datetime(2026, 5, 14, 18, 0, tzinfo=il)
+        nxt = next_tase_regular_session_open_utc(thu_after_close.astimezone(timezone.utc))
+        self.assertEqual(nxt.astimezone(il).weekday(), 6)  # Sunday
+        self.assertEqual(nxt.astimezone(il).hour, 9)
+
+    def test_next_open_idempotent_inside_session(self) -> None:
+        il = ZoneInfo("Asia/Jerusalem")
+        mid = datetime(2026, 5, 17, 11, 22, tzinfo=il)
+        u = mid.astimezone(timezone.utc)
+        nxt = next_tase_regular_session_open_utc(u)
+        self.assertEqual(nxt, u.replace(microsecond=0))
 
     def test_saturday_closed(self) -> None:
         dt = datetime(2026, 5, 16, 10, 30, tzinfo=ZoneInfo("Asia/Jerusalem"))

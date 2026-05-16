@@ -85,7 +85,10 @@ class Config:
     sim_start_iso: str | None = field(default_factory=lambda: _env_opt_str("DEMO_TRADER_SIM_START_ISO"))
     price_bar_interval: str = field(default_factory=lambda: _env_str("DEMO_TRADER_PRICE_BAR_INTERVAL", "5m"))
     price_history_days: int = field(default_factory=lambda: max(1, _env_int("DEMO_TRADER_PRICE_HISTORY_DAYS", 30)))
-    sim_ingest_live: bool = field(default_factory=lambda: _env_bool("DEMO_TRADER_SIM_INGEST_LIVE", False))
+    sim_ingest_live: bool = field(default_factory=lambda: _env_bool("DEMO_TRADER_SIM_INGEST_LIVE", True))
+    sim_skip_closed_hours: bool = field(
+        default_factory=lambda: _env_bool("DEMO_TRADER_SIM_SKIP_CLOSED_HOURS", True)
+    )
 
     def rss_feeds(self) -> Sequence[str]:
         raw = _env_str(
