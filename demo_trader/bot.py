@@ -4,6 +4,7 @@ import argparse
 import sys
 import time
 import traceback
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -19,15 +20,18 @@ from demo_trader.db import (
     upsert_companies,
 )
 from demo_trader.fundamentals import refresh_watchlist_fundamentals
+from demo_trader.historic_bars import maybe_daily_intraday_backfill, quotes_from_bars
 from demo_trader.knowledge_ingest import ingest_headlines, ingest_maya_rows
 from demo_trader.market_data import fetch_last_prices, prices_map
 from demo_trader.maya_client import maya_digest_for_prompt, normalize_maya_items
 from demo_trader.news_feeds import fetch_headlines, headlines_digest, mock_headlines
 from demo_trader.ollama_client import build_hebrew_trader_prompt, chat_json
 from demo_trader.paper_broker import Quote, execute_trade, portfolio_nav
+from demo_trader.sim_clock import bump_sim_minutes, load_sim_now
 from demo_trader.state_store import _utc_now_iso, load_state, save_state
 from demo_trader.ta35_catalog import TA35_COMPANIES, knowledge_catalog_digest
 from demo_trader.tase_calendar import is_tase_regular_trading_hours
+from demo_trader.time_utils import parse_sim_start_iso, sim_default_start_utc
 
 
 def _fmt_perf(p) -> str:
@@ -65,6 +69,10 @@ def _quotes_text(quotes: dict[str, Quote]) -> str:
     return "\n".join(lines) if lines else "(no quotes)"
 
 
+def _quotes_from_price_map(px: dict[str, float]) -> dict[str, Quote]:
+    return {s: Quote(symbol=s, last=float(p), currency="ILS") for s, p in px.items()}
+
+
 def run_cycle(cfg: Config) -> int:
     conn = open_db(cfg.db_path)
     upsert_companies(
@@ -80,46 +88,101 @@ def run_cycle(cfg: Config) -> int:
     symbols.add(cfg.benchmark_symbol)
     symbols.update(state.positions.keys())
 
-    quotes = fetch_last_prices(sorted(symbols))
-    prices = prices_map(quotes)
+    sim_now = None
+    sim_ts_label: str | None = None
+
+    if cfg.simulation:
+        bar_syms = sorted(set(cfg.watchlist) | {cfg.benchmark_symbol})
+        maybe_daily_intraday_backfill(
+            conn,
+            symbols=bar_syms,
+            interval=cfg.price_bar_interval,
+            history_days=cfg.price_history_days,
+        )
+        fallback_start = sim_default_start_utc(days_ago=cfg.sim_start_days_ago)
+        default_start = parse_sim_start_iso(cfg.sim_start_iso, fallback_start=fallback_start)
+        sim_now = load_sim_now(conn, default_start=default_start)
+        sim_ts_label = sim_now.replace(microsecond=0).isoformat()
+        px_map = quotes_from_bars(
+            conn,
+            symbols=sorted(symbols),
+            interval=cfg.price_bar_interval,
+            as_of=sim_now,
+        )
+        quotes = _quotes_from_price_map(px_map)
+        prices = prices_map(quotes)
+    else:
+        quotes = fetch_last_prices(sorted(symbols))
+        prices = prices_map(quotes)
 
     bench_q = quotes.get(cfg.benchmark_symbol)
     if bench_q is None or bench_q.last <= 0:
         print(f"ERROR: missing benchmark quote for {cfg.benchmark_symbol}", file=sys.stderr)
         return 2
 
-    finalize_open_trade_outcomes(conn, prices=prices, benchmark_px=float(bench_q.last))
-
-    headlines = fetch_headlines(cfg.rss_feeds(), cfg.news_max_headlines)
-    if not headlines:
-        headlines = mock_headlines()
-    inserted = ingest_headlines(conn, headlines)
-
-    maya_rows = normalize_maya_items(
-        lookback_days=cfg.maya_lookback_days,
-        breaking_limit=cfg.maya_breaking_limit,
-        post_max_keep=cfg.maya_post_max_keep,
-        timeout_sec=cfg.maya_http_timeout_sec,
+    finalize_open_trade_outcomes(
+        conn,
+        prices=prices,
+        benchmark_px=float(bench_q.last),
+        outcome_ts_utc_iso=sim_ts_label if cfg.simulation else None,
     )
-    maya_inserted = ingest_maya_rows(conn, maya_rows)
-    maya_digest = maya_digest_for_prompt(maya_rows, max_lines=40)
 
-    trading_allowed = is_tase_regular_trading_hours()
-    news_block = headlines_digest(headlines, max_lines=35)
+    if cfg.simulation and not cfg.sim_ingest_live:
+        headlines = []
+        inserted = 0
+        maya_rows = []
+        maya_inserted = 0
+        maya_digest = (
+            "(סימולציה: ללא מאיה חיה; משתמשים בידע שכבר נשמר במסד הנתונים עד זמן הסימולציה)"
+        )
+        news_block = (
+            "(סימולציה: ללא RSS חי; משתמשים בידע שכבר נשמר במסד הנתונים עד זמן הסימולציה)"
+        )
+    else:
+        headlines = fetch_headlines(cfg.rss_feeds(), cfg.news_max_headlines)
+        if not headlines:
+            headlines = mock_headlines()
+        inserted = ingest_headlines(conn, headlines)
+
+        maya_rows = normalize_maya_items(
+            lookback_days=cfg.maya_lookback_days,
+            breaking_limit=cfg.maya_breaking_limit,
+            post_max_keep=cfg.maya_post_max_keep,
+            timeout_sec=cfg.maya_http_timeout_sec,
+        )
+        maya_inserted = ingest_maya_rows(conn, maya_rows)
+        maya_digest = maya_digest_for_prompt(maya_rows, max_lines=40)
+        news_block = headlines_digest(headlines, max_lines=35)
+
+    ref_for_tase = sim_now if cfg.simulation else None
+    if cfg.enforce_tase_hours:
+        trading_allowed = is_tase_regular_trading_hours(ref_for_tase)
+    else:
+        trading_allowed = True
 
     ensure_session(state, benchmark_symbol=cfg.benchmark_symbol, benchmark_px=float(bench_q.last), prices=prices)
 
     perf_pre = compute_performance(state, prices=prices, benchmark_last=float(bench_q.last))
     nav_pre = portfolio_nav(state, prices)
 
-    knowledge_digest = recent_knowledge_for_prompt(conn, limit=cfg.knowledge_prompt_rows)
+    knowledge_digest = recent_knowledge_for_prompt(
+        conn,
+        limit=cfg.knowledge_prompt_rows,
+        as_of_utc=sim_now if cfg.simulation else None,
+    )
     catalog_digest = knowledge_catalog_digest()
     fundamentals_digest = companies_fundamentals_digest(conn, cfg.watchlist)
 
     print("--- cycle ---")
+    if cfg.simulation and sim_now is not None:
+        print(
+            f"SIMULATION sim_now_utc={sim_now.isoformat()} | step={cfg.sim_step_minutes}m | "
+            f"bars={cfg.price_bar_interval} | ingest_live={cfg.sim_ingest_live}"
+        )
     print(
-        f"tase_trading_allowed={trading_allowed} | rss_headlines={len(headlines)} | "
-        f"rss_db_new≈{inserted} | maya_rows={len(maya_rows)} maya_db_new≈{maya_inserted}"
+        f"tase_trading_allowed={trading_allowed} (enforce_hours={cfg.enforce_tase_hours}) | "
+        f"rss_headlines={len(headlines)} | rss_db_new≈{inserted} | "
+        f"maya_rows={len(maya_rows)} maya_db_new≈{maya_inserted}"
     )
     print(_fmt_perf(perf_pre))
 
@@ -137,6 +200,7 @@ def run_cycle(cfg: Config) -> int:
     )
 
     pending: list[dict[str, Any]] = []
+    audit_ts = sim_ts_label if cfg.simulation and sim_ts_label else None
 
     try:
         decision = chat_json(
@@ -160,6 +224,7 @@ def run_cycle(cfg: Config) -> int:
             benchmark_return_pct=perf_pre.benchmark_return_pct,
             alpha_pct=perf_pre.alpha_vs_benchmark_pct,
             headline_count=len(headlines),
+            ts_utc_iso=audit_ts,
         )
         insert_decision(
             conn,
@@ -182,8 +247,9 @@ def run_cycle(cfg: Config) -> int:
             benchmark_return_pct=perf_pre.benchmark_return_pct,
             alpha_pct=perf_pre.alpha_vs_benchmark_pct,
             broker_message=None,
+            ts_utc_iso=audit_ts,
         )
-        state.last_cycle_ts = _utc_now_iso()
+        state.last_cycle_ts = audit_ts or _utc_now_iso()
         save_state(path, state)
         return 3
 
@@ -351,8 +417,21 @@ def run_cycle(cfg: Config) -> int:
             executed += 1
 
     syms_end = sorted(set(cfg.watchlist) | set(state.positions.keys()) | {cfg.benchmark_symbol})
-    quotes_end = fetch_last_prices(syms_end)
-    prices_end = prices_map(quotes_end)
+    if cfg.simulation and sim_now is not None:
+        sim_after = bump_sim_minutes(conn, sim_now=sim_now, step_minutes=cfg.sim_step_minutes)
+        px_end = quotes_from_bars(
+            conn,
+            symbols=syms_end,
+            interval=cfg.price_bar_interval,
+            as_of=sim_after,
+        )
+        quotes_end = _quotes_from_price_map(px_end)
+        prices_end = prices_map(quotes_end)
+        print(f"sim clock advanced to {sim_after.isoformat()} (UTC)", flush=True)
+    else:
+        quotes_end = fetch_last_prices(syms_end)
+        prices_end = prices_map(quotes_end)
+
     bench_end = quotes_end.get(cfg.benchmark_symbol) or bench_q
     perf_post = compute_performance(state, prices=prices_end, benchmark_last=float(bench_end.last))
 
@@ -368,6 +447,7 @@ def run_cycle(cfg: Config) -> int:
         benchmark_return_pct=perf_post.benchmark_return_pct,
         alpha_pct=perf_post.alpha_vs_benchmark_pct,
         headline_count=len(headlines),
+        ts_utc_iso=audit_ts,
     )
 
     for row in pending:
@@ -392,13 +472,14 @@ def run_cycle(cfg: Config) -> int:
             benchmark_return_pct=row.get("benchmark_return_pct"),
             alpha_pct=row.get("alpha_pct"),
             broker_message=row.get("broker_message"),
+            ts_utc_iso=audit_ts,
         )
 
     if analysis_he:
         print("model analysis (he):")
         print(analysis_he)
 
-    state.last_cycle_ts = _utc_now_iso()
+    state.last_cycle_ts = audit_ts or _utc_now_iso()
     save_state(path, state)
 
     print(f"executed trades this cycle: {executed}")
@@ -415,25 +496,10 @@ def main(argv: list[str] | None = None) -> int:
     args = p.parse_args(argv)
 
     cfg0 = Config()
-    cfg = Config(
-        ollama_base_url=cfg0.ollama_base_url,
+    cfg = replace(
+        cfg0,
         ollama_model=args.model or cfg0.ollama_model,
         interval_minutes=args.interval_minutes or cfg0.interval_minutes,
-        starting_cash_ils=cfg0.starting_cash_ils,
-        state_path=cfg0.state_path,
-        db_path=cfg0.db_path,
-        slippage_bps=cfg0.slippage_bps,
-        benchmark_symbol=cfg0.benchmark_symbol,
-        watchlist=cfg0.watchlist,
-        max_trades_per_cycle=cfg0.max_trades_per_cycle,
-        max_position_pct=cfg0.max_position_pct,
-        news_max_headlines=cfg0.news_max_headlines,
-        ollama_timeout_sec=cfg0.ollama_timeout_sec,
-        knowledge_prompt_rows=cfg0.knowledge_prompt_rows,
-        maya_lookback_days=cfg0.maya_lookback_days,
-        maya_breaking_limit=cfg0.maya_breaking_limit,
-        maya_post_max_keep=cfg0.maya_post_max_keep,
-        maya_http_timeout_sec=cfg0.maya_http_timeout_sec,
     )
 
     if args.once:

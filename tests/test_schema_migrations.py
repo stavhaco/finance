@@ -22,8 +22,9 @@ class TestSchemaMigrations(unittest.TestCase):
             init_schema(conn)
             conn.close()
 
+            expected_applied = set(range(1, EXPECTED_LATEST_VERSION + 1))
             conn = open_db(path, announce_migrations=False)
-            self.assertEqual(applied_versions(conn), {EXPECTED_LATEST_VERSION})
+            self.assertEqual(applied_versions(conn), expected_applied)
             cur = conn.execute("PRAGMA table_info(companies)")
             cols = {str(r[1]) for r in cur.fetchall()}
             self.assertIn("market_cap", cols)
@@ -36,9 +37,22 @@ class TestSchemaMigrations(unittest.TestCase):
             init_schema(conn)
             r2 = run_pending_migrations(conn)
             conn.close()
-            self.assertEqual(before, {EXPECTED_LATEST_VERSION})
+            self.assertEqual(before, expected_applied)
             self.assertEqual(r2.applied, tuple())
             self.assertEqual(r2.latest_version, EXPECTED_LATEST_VERSION)
+
+    def test_migration_002_sim_tables(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "s.db")
+            conn = open_db(path, announce_migrations=False)
+            cur = conn.execute("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
+            names = {str(r[0]) for r in cur.fetchall()}
+            self.assertIn("app_kv", names)
+            self.assertIn("price_bars", names)
+            cur = conn.execute("PRAGMA table_info(knowledge_events)")
+            cols = {str(r[1]) for r in cur.fetchall()}
+            self.assertIn("event_time", cols)
+            conn.close()
 
 
 if __name__ == "__main__":

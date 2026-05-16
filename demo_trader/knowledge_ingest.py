@@ -4,6 +4,7 @@ import re
 import sqlite3
 
 from demo_trader.db import insert_knowledge_event
+from demo_trader.time_utils import maya_publish_to_utc_iso, rss_published_to_utc_iso
 from demo_trader.news_feeds import Headline
 from demo_trader.ta35_catalog import TA35_COMPANIES
 
@@ -45,6 +46,7 @@ def ingest_headlines(conn: sqlite3.Connection, headlines: list[Headline]) -> int
             title=h.title,
             snippet=None,
             matched_symbol=sym,
+            event_time=rss_published_to_utc_iso(h.published),
         )
         if ok:
             inserted += 1
@@ -72,6 +74,7 @@ def ingest_maya_rows(conn: sqlite3.Connection, rows: list) -> int:
             title=title,
             snippet=str(snippet) if snippet is not None else None,
             matched_symbol=sym,
+            event_time=maya_publish_to_utc_iso(getattr(row, "publish_raw", None)),
         ):
             inserted += 1
     return inserted

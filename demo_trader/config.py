@@ -25,6 +25,21 @@ def _env_str(key: str, default: str) -> str:
     return os.environ.get(key, default).strip() or default
 
 
+def _env_bool(key: str, default: bool) -> bool:
+    raw = os.environ.get(key)
+    if raw is None or raw.strip() == "":
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def _env_opt_str(key: str) -> str | None:
+    raw = os.environ.get(key)
+    if raw is None:
+        return None
+    s = raw.strip()
+    return s if s else None
+
+
 def _parse_symbols(raw: str) -> tuple[str, ...]:
     parts = [p.strip() for p in raw.replace(";", ",").split(",")]
     return tuple(p for p in parts if p)
@@ -61,6 +76,16 @@ class Config:
     maya_breaking_limit: int = field(default_factory=lambda: max(5, _env_int("DEMO_TRADER_MAYA_BREAKING_LIMIT", 80)))
     maya_post_max_keep: int = field(default_factory=lambda: max(10, _env_int("DEMO_TRADER_MAYA_POST_MAX_KEEP", 150)))
     maya_http_timeout_sec: int = field(default_factory=lambda: max(15, _env_int("DEMO_TRADER_MAYA_HTTP_TIMEOUT_SEC", 60)))
+    enforce_tase_hours: bool = field(
+        default_factory=lambda: _env_bool("DEMO_TRADER_ENFORCE_TASE_HOURS", True)
+    )
+    simulation: bool = field(default_factory=lambda: _env_bool("DEMO_TRADER_SIMULATION", False))
+    sim_step_minutes: int = field(default_factory=lambda: max(1, _env_int("DEMO_TRADER_SIM_STEP_MINUTES", 15)))
+    sim_start_days_ago: int = field(default_factory=lambda: max(1, _env_int("DEMO_TRADER_SIM_START_DAYS_AGO", 7)))
+    sim_start_iso: str | None = field(default_factory=lambda: _env_opt_str("DEMO_TRADER_SIM_START_ISO"))
+    price_bar_interval: str = field(default_factory=lambda: _env_str("DEMO_TRADER_PRICE_BAR_INTERVAL", "5m"))
+    price_history_days: int = field(default_factory=lambda: max(1, _env_int("DEMO_TRADER_PRICE_HISTORY_DAYS", 30)))
+    sim_ingest_live: bool = field(default_factory=lambda: _env_bool("DEMO_TRADER_SIM_INGEST_LIVE", False))
 
     def rss_feeds(self) -> Sequence[str]:
         raw = _env_str(

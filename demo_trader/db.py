@@ -121,14 +121,15 @@ def insert_knowledge_event(
     title: str,
     snippet: str | None,
     matched_symbol: str | None,
+    event_time: str | None = None,
 ) -> bool:
     try:
         conn.execute(
             """
-            INSERT INTO knowledge_events(ts, source, url, title, snippet, matched_symbol)
-            VALUES(?,?,?,?,?,?)
+            INSERT INTO knowledge_events(ts, event_time, source, url, title, snippet, matched_symbol)
+            VALUES(?,?,?,?,?,?,?)
             """,
-            (_utc_iso(), source, url, title, snippet, matched_symbol),
+            (_utc_iso(), event_time, source, url, title, snippet, matched_symbol),
         )
         conn.commit()
         return True
@@ -210,23 +211,49 @@ def companies_fundamentals_digest(conn: sqlite3.Connection, symbols: Iterable[st
     return "\n".join(lines)
 
 
-def recent_knowledge_for_prompt(conn: sqlite3.Connection, *, limit: int = 60) -> str:
-    cur = conn.execute(
-        """
-        SELECT ts, source, matched_symbol, title
-        FROM knowledge_events
-        ORDER BY datetime(ts) DESC
-        LIMIT ?
-        """,
-        (limit,),
-    )
+def recent_knowledge_for_prompt(
+    conn: sqlite3.Connection,
+    *,
+    limit: int = 60,
+    as_of_utc: datetime | None = None,
+    source_prefix: str | None = None,
+) -> str:
+    if as_of_utc is None:
+        cur = conn.execute(
+            """
+            SELECT ts, event_time, source, matched_symbol, title
+            FROM knowledge_events
+            ORDER BY datetime(COALESCE(event_time, ts)) DESC
+            LIMIT ?
+            """,
+            (limit,),
+        )
+    else:
+        as_iso = as_of_utc.astimezone(timezone.utc).replace(microsecond=0).isoformat()
+        where = "(COALESCE(event_time, ts) <= ?)"
+        params: list[Any] = [as_iso]
+        if source_prefix:
+            where += " AND source LIKE ?"
+            params.append(f"{source_prefix}%")
+        params.append(limit)
+        cur = conn.execute(
+            f"""
+            SELECT ts, event_time, source, matched_symbol, title
+            FROM knowledge_events
+            WHERE {where}
+            ORDER BY datetime(COALESCE(event_time, ts)) DESC
+            LIMIT ?
+            """,
+            params,
+        )
     rows = cur.fetchall()
     if not rows:
         return "(אין עדיין אירועי ידע שנשמרו במסד)"
     lines: list[str] = []
     for r in rows:
         sym = r["matched_symbol"] or "—"
-        lines.append(f"- [{r['ts']}] {r['source']} | {sym} | {r['title']}")
+        when = r["event_time"] or r["ts"]
+        lines.append(f"- [{when}] {r['source']} | {sym} | {r['title']}")
     return "אירועי ידע אחרונים מהרצות קודמות (ממוין מהחדש לישן):\n" + "\n".join(lines)
 
 
@@ -242,6 +269,7 @@ def insert_cycle(
     benchmark_return_pct: float | None,
     alpha_pct: float | None,
     headline_count: int,
+    ts_utc_iso: str | None = None,
 ) -> int:
     cur = conn.execute(
         """
@@ -251,7 +279,7 @@ def insert_cycle(
         ) VALUES(?,?,?,?,?,?,?,?,?,?)
         """,
         (
-            _utc_iso(),
+            ts_utc_iso or _utc_iso(),
             int(trading_allowed),
             int(knowledge_only),
             nav_ils,
@@ -289,6 +317,7 @@ def insert_decision(
     benchmark_return_pct: float | None,
     alpha_pct: float | None,
     broker_message: str | None,
+    ts_utc_iso: str | None = None,
 ) -> int:
     cur = conn.execute(
         """
@@ -301,7 +330,7 @@ def insert_decision(
         """,
         (
             cycle_id,
-            _utc_iso(),
+            ts_utc_iso or _utc_iso(),
             int(trading_allowed),
             kind,
             symbol,
@@ -331,6 +360,7 @@ def finalize_open_trade_outcomes(
     *,
     prices: dict[str, float],
     benchmark_px: float,
+    outcome_ts_utc_iso: str | None = None,
 ) -> int:
     """Mark-to-market for executed trades that have not been marked yet."""
     cur = conn.execute(
@@ -342,7 +372,7 @@ def finalize_open_trade_outcomes(
     )
     rows = cur.fetchall()
     updated = 0
-    now = _utc_iso()
+    now = outcome_ts_utc_iso or _utc_iso()
     for r in rows:
         sym = str(r["symbol"])
         side = str(r["side"] or "").lower()

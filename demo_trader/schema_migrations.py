@@ -14,7 +14,7 @@ def _utc_iso() -> str:
 
 
 # Bump when adding a new migration at the bottom of MIGRATIONS.
-EXPECTED_LATEST_VERSION: int = 1
+EXPECTED_LATEST_VERSION: int = 2
 
 
 def ensure_migrations_table(conn: sqlite3.Connection) -> None:
@@ -65,6 +65,43 @@ COMPANY_FUNDAMENTAL_COLUMNS: tuple[tuple[str, str], ...] = (
 )
 
 
+
+
+def _upgrade_002_simulation_bars_and_event_times(conn: sqlite3.Connection) -> None:
+    """Simulation support: intraday bars, app_kv, and knowledge_events.event_time."""
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS app_kv (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        );
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS price_bars (
+            symbol TEXT NOT NULL,
+            bar_start TEXT NOT NULL,
+            interval TEXT NOT NULL,
+            open REAL,
+            high REAL,
+            low REAL,
+            close REAL,
+            volume REAL,
+            PRIMARY KEY (symbol, bar_start, interval)
+        );
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_price_bars_lookup ON price_bars(symbol, interval, bar_start);"
+    )
+    cur = conn.execute("PRAGMA table_info(knowledge_events)")
+    have = {str(r[1]) for r in cur.fetchall()}
+    if "event_time" not in have:
+        conn.execute("ALTER TABLE knowledge_events ADD COLUMN event_time TEXT")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_knowledge_events_event_time ON knowledge_events(event_time);")
+    conn.commit()
+
 def _upgrade_001_company_fundamentals(conn: sqlite3.Connection) -> None:
     """Add Yahoo/fundamental analytics columns to `companies` (idempotent per column)."""
     cur = conn.execute("PRAGMA table_info(companies)")
@@ -80,6 +117,7 @@ MigrationFn = Callable[[sqlite3.Connection], None]
 
 MIGRATIONS: Sequence[tuple[int, str, MigrationFn]] = (
     (1, "001_company_fundamentals", _upgrade_001_company_fundamentals),
+    (2, "002_simulation_bars_and_event_times", _upgrade_002_simulation_bars_and_event_times),
 )
 
 
