@@ -2,6 +2,12 @@
 
 This repository contains an **educational** paper-trading loop (not investment advice) focused on a **TA-35-style universe** of Israeli large caps (Yahoo Finance symbols ending in `.TA`), **Hebrew-first news context**, and a **local Ollama** JSON policy.
 
+## Architecture
+
+End-to-end flow (RSS → knowledge DB → Ollama → paper trades → Telegram summary) with diagrams:
+
+**[docs/SYSTEM_FLOW.md](docs/SYSTEM_FLOW.md)**
+
 ## What it does now
 
 - **Universe / “knowledge center”**: a curated `TA35_COMPANIES` catalog (35 names) with Hebrew display names, sectors, and coarse categories (`demo_trader/ta35_catalog.py`). This is a **static convenience snapshot**; official index membership changes over time, so refresh from TASE when you care about exact parity.
