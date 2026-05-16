@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
 from demo_trader.db import init_schema, insert_cycle, insert_decision, open_db, upsert_companies
+from demo_trader.content_enrich import _host_allowed
 from demo_trader.tase_calendar import (
     is_tase_regular_trading_hours,
     is_tase_weekday_il,
@@ -87,3 +88,14 @@ class TestTaseCalendar(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestEnrichAllowlist(unittest.TestCase):
+    def test_host_allowed_suffix(self) -> None:
+        allow = ("globes.co.il", "maya.tase.co.il")
+        self.assertTrue(_host_allowed("https://www.globes.co.il/foo", allow))
+        self.assertTrue(_host_allowed("https://maya.tase.co.il/he/x", allow))
+        self.assertFalse(_host_allowed("https://evil.example/phish", allow))
+
+    def test_host_allowed_all_when_none(self) -> None:
+        self.assertTrue(_host_allowed("https://example.com/z", None))

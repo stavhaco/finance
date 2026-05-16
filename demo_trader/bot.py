@@ -11,6 +11,7 @@ from typing import Any
 
 from demo_trader.benchmark import compute_performance, ensure_session
 from demo_trader.config import Config
+from demo_trader.content_enrich import build_article_context_en
 from demo_trader.db import (
     companies_fundamentals_digest,
     finalize_open_trade_outcomes,
@@ -236,6 +237,26 @@ def run_cycle(cfg: Config) -> int:
     )
     print(_fmt_perf(perf_pre))
 
+    if cfg.simulation and not cfg.sim_ingest_live:
+        article_context_en = ""
+    elif cfg.enrich_article_urls:
+        h_src = (
+            _filter_headlines_for_sim(headlines, sim_now)
+            if (cfg.simulation and sim_now is not None)
+            else headlines
+        )
+        m_src = (
+            _filter_maya_rows_for_sim(maya_rows, sim_now)
+            if (cfg.simulation and sim_now is not None)
+            else maya_rows
+        )
+        article_context_en = build_article_context_en(cfg, h_src, m_src)
+    else:
+        article_context_en = ""
+
+    if article_context_en:
+        print(f"article_context_en: {len(article_context_en)} chars", flush=True)
+
     system, user = build_hebrew_trader_prompt(
         watchlist=cfg.watchlist,
         trading_allowed=trading_allowed,
@@ -246,6 +267,7 @@ def run_cycle(cfg: Config) -> int:
         quotes_text=_quotes_text(quotes),
         portfolio_text=_portfolio_text(state, prices),
         news_text=news_block,
+        article_context_en=article_context_en,
         max_trades=cfg.max_trades_per_cycle,
     )
 

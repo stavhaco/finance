@@ -40,6 +40,22 @@ def _env_opt_str(key: str) -> str | None:
     return s if s else None
 
 
+def _enrich_url_host_suffixes() -> tuple[str, ...] | None:
+    raw = os.environ.get("DEMO_TRADER_ENRICH_URL_HOST_SUFFIXES")
+    if raw is None:
+        return (
+            "globes.co.il",
+            "calcalist.co.il",
+            "themarker.co.il",
+            "bizportal.co.il",
+            "maya.tase.co.il",
+        )
+    s = raw.strip()
+    if s == "" or s == "*":
+        return None
+    return tuple(x.strip().lower().lstrip(".") for x in s.split(",") if x.strip())
+
+
 def _parse_symbols(raw: str) -> tuple[str, ...]:
     parts = [p.strip() for p in raw.replace(";", ",").split(",")]
     return tuple(p for p in parts if p)
@@ -86,6 +102,24 @@ class Config:
     price_bar_interval: str = field(default_factory=lambda: _env_str("DEMO_TRADER_PRICE_BAR_INTERVAL", "5m"))
     price_history_days: int = field(default_factory=lambda: max(1, _env_int("DEMO_TRADER_PRICE_HISTORY_DAYS", 30)))
     sim_ingest_live: bool = field(default_factory=lambda: _env_bool("DEMO_TRADER_SIM_INGEST_LIVE", True))
+    enrich_article_urls: bool = field(
+        default_factory=lambda: _env_bool("DEMO_TRADER_ENRICH_ARTICLE_URLS", False)
+    )
+    enrich_max_articles: int = field(default_factory=lambda: max(1, _env_int("DEMO_TRADER_ENRICH_MAX_ARTICLES", 4)))
+    enrich_max_bytes: int = field(default_factory=lambda: max(50_000, _env_int("DEMO_TRADER_ENRICH_MAX_BYTES", 1_500_000)))
+    enrich_max_chars_per_article: int = field(
+        default_factory=lambda: max(500, _env_int("DEMO_TRADER_ENRICH_MAX_CHARS", 5000))
+    )
+    enrich_fetch_timeout_sec: int = field(default_factory=lambda: max(5, _env_int("DEMO_TRADER_ENRICH_FETCH_TIMEOUT_SEC", 25)))
+    enrich_translate_timeout_sec: int = field(
+        default_factory=lambda: max(30, _env_int("DEMO_TRADER_ENRICH_TRANSLATE_TIMEOUT_SEC", 180))
+    )
+    enrich_translate_max_input_chars: int = field(
+        default_factory=lambda: max(500, _env_int("DEMO_TRADER_ENRICH_TRANSLATE_MAX_INPUT_CHARS", 10_000))
+    )
+    ollama_translate_model: str | None = field(default_factory=lambda: _env_opt_str("DEMO_TRADER_OLLAMA_TRANSLATE_MODEL"))
+    enrich_url_host_suffixes: tuple[str, ...] | None = field(default_factory=_enrich_url_host_suffixes)
+
     sim_skip_closed_hours: bool = field(
         default_factory=lambda: _env_bool("DEMO_TRADER_SIM_SKIP_CLOSED_HOURS", True)
     )

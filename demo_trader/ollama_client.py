@@ -41,6 +41,53 @@ def chat_json(
     return json.loads(raw)
 
 
+def chat_plain(
+    *,
+    base_url: str,
+    model: str,
+    system: str,
+    user: str,
+    timeout_sec: int,
+) -> str:
+    """Single-turn chat without JSON schema enforcement (translation / summarization)."""
+    url = base_url.rstrip("/") + "/api/chat"
+    payload = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
+        ],
+        "stream": False,
+    }
+    r = requests.post(url, json=payload, timeout=timeout_sec)
+    r.raise_for_status()
+    data = r.json()
+    content = (data.get("message") or {}).get("content") or ""
+    return _strip_json_fence(str(content)).strip()
+
+
+def translate_financial_to_english(
+    text: str,
+    *,
+    base_url: str,
+    model: str,
+    timeout_sec: int,
+    max_input_chars: int = 12_000,
+) -> str:
+    """Translate Hebrew (or mixed) financial excerpt to English via Ollama."""
+    t = (text or "").strip()
+    if not t:
+        return ""
+    if len(t) > max_input_chars:
+        t = t[: max(0, max_input_chars - 30)].rstrip() + "\n...[truncated for translation]"
+    system = (
+        "You translate Israeli financial and business news into clear English. "
+        "Preserve numbers, percentages, dates, and ticker symbols like TEVA.TA. "
+        "Output only the English translation — no preface, no markdown fences."
+    )
+    return chat_plain(base_url=base_url, model=model, system=system, user=t, timeout_sec=timeout_sec)
+
+
 def build_hebrew_trader_prompt(
     *,
     watchlist: tuple[str, ...],
@@ -52,6 +99,7 @@ def build_hebrew_trader_prompt(
     quotes_text: str,
     portfolio_text: str,
     news_text: str,
+    article_context_en: str = "",
     max_trades: int,
 ) -> tuple[str, str]:
     system = (
@@ -87,6 +135,9 @@ def build_hebrew_trader_prompt(
 
 כותרות חדשות (RSS, בעברית ככל האפשר):
 {news_text}
+
+Article bodies (English; fetched from URLs where allowed; excerpt may be incomplete):
+{article_context_en or "(none)"}
 
 החזר JSON בצורה:
 {{
