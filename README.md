@@ -2,11 +2,12 @@
 
 This repository contains an **educational** paper-trading loop (not investment advice) focused on a **TA-35-style universe** of Israeli large caps (Yahoo Finance symbols ending in `.TA`), **Hebrew-first news context**, and a **local Ollama** JSON policy.
 
-## Architecture
+## Documentation
 
-End-to-end flow with plain-language glossary (cycle, paper broker, RSS, `paper_state.json`, `trader.db`) and diagrams:
-
-**[docs/SYSTEM_FLOW.md](docs/SYSTEM_FLOW.md)**
+| Doc | Audience |
+|-----|----------|
+| **[docs/BUSINESS_OVERVIEW.md](docs/BUSINESS_OVERVIEW.md)** | Presentation-style: what it does, daily flow, Telegram — minimal jargon |
+| **[docs/SYSTEM_FLOW.md](docs/SYSTEM_FLOW.md)** | Technical flow, glossary, file-level detail |
 
 ## What it does now
 
