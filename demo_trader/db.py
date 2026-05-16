@@ -6,6 +6,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
+from demo_trader.schema_migrations import run_pending_migrations
+
 
 def _utc_iso() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
@@ -93,33 +95,6 @@ def init_schema(conn: sqlite3.Connection) -> None:
     )
     conn.commit()
 
-
-_COMPANY_FUNDAMENTAL_COLS: tuple[tuple[str, str], ...] = (
-    ("last_price", "REAL"),
-    ("currency", "TEXT"),
-    ("market_cap", "REAL"),
-    ("enterprise_value", "REAL"),
-    ("trailing_pe", "REAL"),
-    ("forward_pe", "REAL"),
-    ("price_to_book", "REAL"),
-    ("beta", "REAL"),
-    ("fifty_two_week_high", "REAL"),
-    ("fifty_two_week_low", "REAL"),
-    ("return_ytd_pct", "REAL"),
-    ("return_1q_pct", "REAL"),
-    ("return_1y_pct", "REAL"),
-    ("avg_volume_10d", "REAL"),
-    ("fundamentals_updated_ts", "TEXT"),
-)
-
-
-def ensure_company_fundamentals_columns(conn: sqlite3.Connection) -> None:
-    cur = conn.execute("PRAGMA table_info(companies)")
-    have = {str(r[1]) for r in cur.fetchall()}
-    for col, typ in _COMPANY_FUNDAMENTAL_COLS:
-        if col not in have:
-            conn.execute(f"ALTER TABLE companies ADD COLUMN {col} {typ}")
-    conn.commit()
 
 
 def upsert_companies(conn: sqlite3.Connection, rows: Iterable[tuple[str, str, str, str, str]]) -> None:
@@ -397,8 +372,14 @@ def finalize_open_trade_outcomes(
     conn.commit()
     return updated
 
-def open_db(db_path: str) -> sqlite3.Connection:
+def open_db(db_path: str | Path, *, announce_migrations: bool = True) -> sqlite3.Connection:
     conn = connect(db_path)
     init_schema(conn)
-    ensure_company_fundamentals_columns(conn)
+    result = run_pending_migrations(conn)
+    if announce_migrations and result.applied:
+        names = ", ".join(result.applied)
+        print(
+            f"[db] Applied migration(s): {names} (schema version {result.latest_version})",
+            flush=True,
+        )
     return conn

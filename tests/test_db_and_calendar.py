@@ -12,7 +12,7 @@ class TestDb(unittest.TestCase):
     def test_init_and_cycle_decision(self) -> None:
         with tempfile.TemporaryDirectory() as d:
             path = os.path.join(d, "t.db")
-            conn = open_db(path)
+            conn = open_db(path, announce_migrations=False)
             init_schema(conn)
             upsert_companies(conn, [("TEVA.TA", "טבע", "Teva", "תרופות", "ערך")])
             cid = insert_cycle(
