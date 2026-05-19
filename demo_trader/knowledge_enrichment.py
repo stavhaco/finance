@@ -4,7 +4,7 @@ import logging
 from typing import Any
 
 from demo_trader.config import Config
-from demo_trader.content_enrich import _host_allowed, fetch_article_text
+from demo_trader.article_fetch import fetch_knowledge_body
 from demo_trader.db import (
     get_knowledge_event_by_id,
     update_knowledge_enrichment,
@@ -85,14 +85,7 @@ def enrich_knowledge_event_by_id(
     snippet = row.get("snippet")
     snippet_s = str(snippet).strip() if snippet is not None else ""
 
-    body: str | None = None
-    if cfg.knowledge_enrich_fetch_body and url.startswith("http") and _host_allowed(url, cfg.enrich_url_host_suffixes):
-        body = fetch_article_text(
-            url,
-            timeout_sec=cfg.enrich_fetch_timeout_sec,
-            max_bytes=cfg.enrich_max_bytes,
-            max_chars=cfg.enrich_max_chars_per_article,
-        )
+    body: str | None = fetch_knowledge_body(url, snippet_s or None, cfg)
 
     blob = _build_source_blob(
         title=title,

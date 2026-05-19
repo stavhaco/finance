@@ -1,41 +1,140 @@
-# finance — TA-35 paper trader (Hebrew knowledge + SQLite audit log)
+# finance — TA-35 paper trader (Hebrew knowledge + simulation)
 
-This repository contains an **educational** paper-trading loop (not investment advice) focused on a **TA-35-style universe** of Israeli large caps (Yahoo Finance symbols ending in `.TA`), **Hebrew-first news context**, and a **local Ollama** JSON policy.
+Educational **paper trading** loop for Israeli large caps (Yahoo `.TA` symbols), Hebrew/Maya/RSS context, **SQLite knowledge center** with English enrichment, optional **historical simulation**, and **local Ollama** for decisions.
 
-## What it does now
+Not investment advice.
 
-- **Universe / “knowledge center”**: a curated `TA35_COMPANIES` catalog (35 names) with Hebrew display names, sectors, and coarse categories (`demo_trader/ta35_catalog.py`). This is a **static convenience snapshot**; official index membership changes over time, so refresh from TASE when you care about exact parity.
-- **Hebrew sources (RSS)**: defaults prioritize **ynet מבזקים**, plus **Globes** and **Calcalist** feeds when your network permits (many Israeli publishers return 403 to datacenters/bots). You can override `DEMO_TRADER_RSS_FEEDS`.
-- **Maya (מאיה)**: there is a dedicated prompt section, but **no live Maya scraping** yet (Maya is largely a SPA; reliable ingestion typically needs official API keys or browser automation). See `demo_trader/maya_stub.py`.
-- **Knowledge memory**: RSS items are matched to companies (Hebrew names + tickers) and stored in SQLite (`knowledge_events`) for reuse across cycles.
-- **Trading vs learning**:
-  - **Every X minutes** the bot ingests knowledge (RSS → SQLite) and refreshes prices.
-  - **Trades execute only** during a simplified **Sun–Thu 09:00–17:35 Asia/Jerusalem** window (`demo_trader/tase_calendar.py`). Outside that window, model output may still analyze, but executions are logged as `blocked_after_hours`.
-- **Benchmarking**: compares your paper NAV to `TA35.TA` (Yahoo proxy for the TA-35 index level), anchored at the first session snapshot in `data/paper_state.json`.
-- **Audit trail**: `data/trader.db` stores cycles + decisions (including LLM JSON, Hebrew rationales, and rolling mark-to-market fields for executed trades).
-
-## Quick start
+## Quick start (Mac / Linux)
 
 ```bash
+cd /path/to/finance
+python3 -m venv .venv
+source .venv/bin/activate
 pip install -r requirements.txt
+
+# Ollama (separate app — keep it running outside this repo)
+ollama serve   # or use the Ollama.app menu bar on macOS
+ollama pull llama3.2
+
 export OLLAMA_MODEL=llama3.2
+export DEMO_TRADER_KNOWLEDGE_ENRICH_ON_INGEST=1   # translate/summarize new rows once in DB
+
+# One trading cycle (recommended for scheduling)
 python -m demo_trader --once
 ```
 
-Defaults:
+Data defaults:
 
-- Starting cash: **₪100,000** (`DEMO_TRADER_STARTING_CASH_ILS`)
-- Watchlist: **all 35 catalog symbols** unless you override `DEMO_TRADER_WATCHLIST`
-- DB path: `data/trader.db` (`DEMO_TRADER_DB_PATH`)
+| Path | Purpose |
+|------|---------|
+| `data/trader.db` | SQLite: knowledge, cycles, decisions, price bars |
+| `data/paper_state.json` | Paper portfolio + benchmark session |
 
-## Notes / limitations
+## Run reliably on a Mac Mini (outside the Python loop)
 
-- Yahoo Finance data can be delayed or wrong for some `.TA` symbols.
-- TASE **holiday calendar** is not modeled; the trading gate is intentionally conservative and simple.
-- RSS scraping should respect publisher terms; prefer licensed feeds where possible.
-
-## Tests
+**Do not** leave `python -m demo_trader` running its built-in `while True` sleep loop for production scheduling. Use **`--once` per invocation** and let **macOS launchd** (or cron) restart it.
 
 ```bash
-python -m unittest discover -s tests -p 'test_*.py'
+cp scripts/mac/demo-trader.env.example scripts/mac/demo-trader.env
+# edit scripts/mac/demo-trader.env (REPO_ROOT, OLLAMA_MODEL, paths)
+
+./scripts/mac/install_launchd.sh
+# installs ~/Library/LaunchAgents/com.finance.demo-trader.plist
+# logs: data/logs/demo-trader.stdout.log
+
+launchctl kickstart -k gui/$(id -u)/com.finance.demo-trader   # run now
+./scripts/mac/uninstall_launchd.sh                             # remove agent
 ```
+
+The agent runs `scripts/mac/run_cycle.sh` every **15 minutes** (edit `StartInterval` in the plist template). Ollama should run as its own service (Ollama.app or `ollama serve`).
+
+## Knowledge center (translate once, read every cycle)
+
+On each **new** RSS/Maya row (when `DEMO_TRADER_KNOWLEDGE_ENRICH_ON_INGEST=1`):
+
+1. Fetch body: RSS HTML (Globes/Calcalist…) or **Maya HTM/PDF attachments** from API metadata in `snippet`.
+2. One Ollama JSON call stores in `knowledge_events`:
+   - `title_en`, `body_translation_en` (full EN translation)
+   - `executive_summary_en`
+   - `sentiment`: `positive` | `negative` | `neutral`
+   - `trade_usefulness`: `high` | `medium` | `low`
+   - `is_broad_market` (macro / BoI / index-level stories)
+
+Trading cycles read **`trader_knowledge_digest_en`** (TA-35 names, `high` usefulness, or broad market) — **no re-translation per cycle**.
+
+### Backfill existing rows
+
+```bash
+# After migration 003 (applied automatically on first open_db)
+python -m demo_trader.seed_sim --rss --no-enrich    # ingest only, fast
+python -m demo_trader.backfill_knowledge --limit 50 --sleep-sec 1
+
+# Re-enrich everything
+python -m demo_trader.backfill_knowledge --force-all --sleep-sec 1
+```
+
+### Knowledge / enrichment env vars
+
+| Variable | Default | Meaning |
+|----------|---------|---------|
+| `DEMO_TRADER_KNOWLEDGE_ENRICH_ON_INGEST` | `1` | LLM enrich each new row at ingest |
+| `DEMO_TRADER_KNOWLEDGE_ENRICH_FETCH_BODY` | `1` | Fetch HTML/PDF before LLM |
+| `DEMO_TRADER_OLLAMA_ENRICHMENT_MODEL` | (same as `OLLAMA_MODEL`) | Model for enrichment only |
+| `DEMO_TRADER_KNOWLEDGE_ENRICH_TIMEOUT_SEC` | `300` | Ollama timeout per article |
+| `DEMO_TRADER_KNOWLEDGE_ENRICH_MAX_BODY_CHARS` | `14000` | Max chars sent to LLM |
+| `DEMO_TRADER_KNOWLEDGE_TRADER_DIGEST_LIMIT` | `40` | Rows in trading prompt |
+| `DEMO_TRADER_KNOWLEDGE_DIGEST_EXCERPT_CHARS` | `600` | Excerpt of full translation in prompt |
+| `DEMO_TRADER_ENRICH_URL_HOST_SUFFIXES` | globes, calcalist, maya… | `*` = allow all hosts |
+
+## Simulation / practice mode
+
+Replay the past week (or custom start) with historic **5m** bars and news only up to `sim_now`.
+
+| Variable | Default | Meaning |
+|----------|---------|---------|
+| `DEMO_TRADER_SIMULATION` | `0` | Enable sim clock + historic prices |
+| `DEMO_TRADER_SIM_START_DAYS_AGO` | `7` | Start at 00:00 IL N days ago |
+| `DEMO_TRADER_SIM_START_ISO` | — | Explicit UTC/offset start |
+| `DEMO_TRADER_SIM_STEP_MINUTES` | `15` | Advance sim time after each cycle |
+| `DEMO_TRADER_SIM_SKIP_CLOSED_HOURS` | `1` | Jump to next Sun–Thu 09:00–17:35 IL open |
+| `DEMO_TRADER_ENFORCE_TASE_HOURS` | `1` | Block trades outside TASE window (`0` = practice anytime) |
+| `DEMO_TRADER_SIM_INGEST_LIVE` | `1` | Still fetch RSS/Maya each cycle (filtered by `sim_now`) |
+| `DEMO_TRADER_PRICE_BAR_INTERVAL` | `5m` | Stored bar interval (Yahoo ~30d for 5m) |
+| `DEMO_TRADER_PRICE_HISTORY_DAYS` | `30` | Intraday backfill depth |
+
+```bash
+python -m demo_trader.seed_sim --force-bars   # daily gap-fill bars (once per IL day)
+export DEMO_TRADER_SIMULATION=1
+export DEMO_TRADER_SIM_START_DAYS_AGO=7
+python -m demo_trader --once
+```
+
+## Maya API notes
+
+- Breaking announcements: API **`limit` max 5** (client caps automatically).
+- Report text: enrichment prefers **HTM/PDF attachment URLs** from Maya JSON (not the SPA page URL).
+
+## Trading / Ollama env vars
+
+| Variable | Default |
+|----------|---------|
+| `OLLAMA_BASE_URL` | `http://127.0.0.1:11434` |
+| `OLLAMA_MODEL` | `llama3.2` |
+| `DEMO_TRADER_INTERVAL_MINUTES` | `15` (only if you use the built-in loop) |
+| `DEMO_TRADER_STARTING_CASH_ILS` | `100000` |
+| `DEMO_TRADER_WATCHLIST` | all TA-35 catalog symbols |
+| `DEMO_TRADER_DB_PATH` | `data/trader.db` |
+| `DEMO_TRADER_MAX_TRADES_PER_CYCLE` | `3` |
+
+## Tests (no LLM)
+
+```bash
+PYTHONPATH=. python -m unittest discover -s tests -v
+```
+
+## Limitations
+
+- Yahoo `.TA` data can be delayed or wrong.
+- TASE holidays not modeled; hours gate is simplified Sun–Thu 09:00–17:35 IL.
+- RSS from some publishers may 403 non-browser clients.
+- Enrichment quality depends on Ollama model and attachment availability.

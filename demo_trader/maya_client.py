@@ -64,12 +64,27 @@ def _company_names(item: dict[str, Any]) -> str:
 
 
 def _snippet(item: dict[str, Any], channel: str) -> str:
+    attachments: list[dict[str, Any]] = []
+    for att in item.get("attachments") or []:
+        if not isinstance(att, dict):
+            continue
+        rel = att.get("url")
+        if not rel:
+            continue
+        attachments.append(
+            {
+                "fileType": att.get("fileType"),
+                "url": str(rel),
+            }
+        )
     payload = {
         "channel": channel,
         "formId": item.get("formId"),
         "reporterId": item.get("reporterId"),
+        "reportId": item.get("id"),
         "companies": [c.get("name") for c in (item.get("companies") or []) if c.get("name")],
         "companyName": item.get("companyName"),
+        "attachments": attachments,
     }
     return json.dumps(payload, ensure_ascii=False)
 

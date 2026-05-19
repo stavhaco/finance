@@ -571,6 +571,11 @@ def main(argv: list[str] | None = None) -> int:
     if args.once:
         return run_cycle(cfg)
 
+    print(
+        "NOTE: built-in loop mode. For a Mac Mini, prefer `python -m demo_trader --once` "
+        "via scripts/mac/run_cycle.sh + launchd (see README).",
+        flush=True,
+    )
     while True:
         rc = run_cycle(cfg)
         if rc != 0:

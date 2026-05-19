@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.finance.demo-trader</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>__RUN_SCRIPT__</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>DEMO_TRADER_ENV_FILE</key>
+    <string>__ENV_FILE__</string>
+    <key>PATH</key>
+    <string>/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin</string>
+  </dict>
+  <key>WorkingDirectory</key>
+  <string>__REPO_ROOT__</string>
+  <key>StartInterval</key>
+  <integer>900</integer>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>StandardOutPath</key>
+  <string>__REPO_ROOT__/data/logs/demo-trader.stdout.log</string>
+  <key>StandardErrorPath</key>
+  <string>__REPO_ROOT__/data/logs/demo-trader.stderr.log</string>
+  <key>ThrottleInterval</key>
+  <integer>120</integer>
+</dict>
+</plist>
