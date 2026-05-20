@@ -3,14 +3,19 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=_lib.sh
+source "$SCRIPT_DIR/_lib.sh"
+
 ENV_FILE="${DEMO_TRADER_ENV_FILE:-$SCRIPT_DIR/demo-trader.env}"
 
-if [[ -f "$ENV_FILE" ]]; then
-  # shellcheck disable=SC1090
-  source "$ENV_FILE"
+if [[ ! -f "$ENV_FILE" ]]; then
+  echo "Create $ENV_FILE from demo-trader.env.example first:" >&2
+  echo "  cp scripts/mac/demo-trader.env.example scripts/mac/demo-trader.env" >&2
+  exit 1
 fi
 
-REPO_ROOT="${REPO_ROOT:-$(cd "$SCRIPT_DIR/../.." && pwd)}"
+mac_resolve_repo_root "$SCRIPT_DIR" "$ENV_FILE"
+
 RUN_SCRIPT="$SCRIPT_DIR/run_cycle.sh"
 PLIST_SRC="$SCRIPT_DIR/com.finance.demo-trader.plist.template"
 PLIST_DST="$HOME/Library/LaunchAgents/com.finance.demo-trader.plist"
@@ -18,9 +23,14 @@ PLIST_DST="$HOME/Library/LaunchAgents/com.finance.demo-trader.plist"
 chmod +x "$RUN_SCRIPT"
 mkdir -p "$REPO_ROOT/data/logs"
 
-if [[ ! -f "$ENV_FILE" ]]; then
-  echo "Create $ENV_FILE from demo-trader.env.example first." >&2
-  exit 1
+# Persist corrected REPO_ROOT if env still has placeholder
+if grep -q 'REPO_ROOT=.*YOU' "$ENV_FILE" 2>/dev/null; then
+  if [[ "$(uname)" == "Darwin" ]]; then
+    sed -i '' "s|^REPO_ROOT=.*|REPO_ROOT=$REPO_ROOT|" "$ENV_FILE"
+  else
+    sed -i "s|^REPO_ROOT=.*|REPO_ROOT=$REPO_ROOT|" "$ENV_FILE"
+  fi
+  echo "Updated REPO_ROOT in $ENV_FILE"
 fi
 
 sed \
@@ -34,6 +44,7 @@ launchctl bootstrap "gui/$(id -u)" "$PLIST_DST"
 launchctl enable "gui/$(id -u)/com.finance.demo-trader"
 
 echo "Installed $PLIST_DST"
+echo "REPO_ROOT=$REPO_ROOT"
 echo "Logs: $REPO_ROOT/data/logs/demo-trader.{stdout,stderr}.log"
 echo ""
 echo "Run one cycle now:"

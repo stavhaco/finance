@@ -3,18 +3,12 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=_lib.sh
+source "$SCRIPT_DIR/_lib.sh"
+
 ENV_FILE="${DEMO_TRADER_ENV_FILE:-$SCRIPT_DIR/demo-trader.env}"
 
-if [[ -f "$ENV_FILE" ]]; then
-  # shellcheck disable=SC1090
-  set -a
-  source "$ENV_FILE"
-  set +a
-fi
-
-if [[ -z "${REPO_ROOT:-}" ]]; then
-  REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
-fi
+mac_resolve_repo_root "$SCRIPT_DIR" "$ENV_FILE"
 cd "$REPO_ROOT"
 
 mkdir -p data/logs
