@@ -13,12 +13,30 @@ def _utc_iso() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 
 
-def connect(db_path: str | Path) -> sqlite3.Connection:
+def _configure_connection(conn: sqlite3.Connection) -> None:
+    conn.execute("PRAGMA foreign_keys = ON;")
+    conn.execute("PRAGMA journal_mode = WAL;")
+    conn.execute("PRAGMA busy_timeout = 30000;")
+
+
+def connect(db_path: str | Path, *, timeout_sec: float = 30.0) -> sqlite3.Connection:
     path = Path(db_path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(path))
+    conn = sqlite3.connect(str(path), timeout=timeout_sec)
     conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys = ON;")
+    _configure_connection(conn)
+    return conn
+
+
+def connect_readonly(db_path: str | Path, *, timeout_sec: float = 30.0) -> sqlite3.Connection:
+    """Read-only SQLite (dashboard) — avoids blocking the trading loop writer."""
+    path = Path(db_path).resolve()
+    if not path.is_file():
+        raise FileNotFoundError(f"Database not found: {path}")
+    uri = f"file:{path}?mode=ro"
+    conn = sqlite3.connect(uri, uri=True, timeout=timeout_sec)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA busy_timeout = 30000;")
     return conn
 
 

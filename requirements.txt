@@ -4,3 +4,4 @@ requests>=2.31.0,<3
 pandas>=2.0.0,<3
 trafilatura>=1.7.0,<2
 pypdf>=4.0.0,<6
+flask>=3.0.0,<4

@@ -193,6 +193,22 @@ With `DEMO_TRADER_ENFORCE_TASE_HOURS=1`, buys/sells run only **Sunâ€“Thu 09:00â€
 | `DEMO_TRADER_CYCLE_LOG_DIR` | `data/logs/cycles` |
 | `DEMO_TRADER_CYCLE_LOG_FULL_PROMPTS` | `0` |
 
+## Web dashboard
+
+Read-only UI over `data/trader.db`, `data/paper_state.json`, and `data/logs/cycles/`.
+
+```bash
+pip install -r requirements.txt
+./scripts/mac/run_dashboard.sh
+# open http://127.0.0.1:8765/
+```
+
+- **Tab 1:** NAV, cash %, holdings chart, cycle timeline (market open/closed, buy/sell/blocked + reasons, vs TA-35).
+- **Tab 2:** Knowledge center (executive summaries; optional Maya-only filter).
+- Timeframe: 1d / 7d / 30d / 90d / 1y (auto-refresh every 60s).
+
+Uses SQLite **WAL + read-only** connections so the dashboard does not lock the trading loop.
+
 ## Tests (no LLM)
 
 ```bash

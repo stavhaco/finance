@@ -38,8 +38,11 @@ print("Models:", ", ".join(m.get("name", "") for m in d.get("models", [])) or "(
 PY
 
 if [[ -n "${MODEL:-}" ]]; then
-  if curl -sf "${BASE}/api/tags" | grep -q "\"name\":\"${MODEL}\""; then
+  tags="$(curl -sf "${BASE}/api/tags" || true)"
+  if echo "$tags" | grep -qE "\"name\":\"${MODEL}(:latest)?\""; then
     echo "Model ${MODEL} is available."
+  elif echo "$tags" | grep -q "\"name\":\"${MODEL}:latest\""; then
+    echo "Model ${MODEL}:latest is available (matches OLLAMA_MODEL=${MODEL})."
   else
     echo "WARN: model ${MODEL} not in list — on Mac run: ollama pull ${MODEL}"
   fi
