@@ -37,6 +37,18 @@ ollama_mac_stop() {
   sleep 2
 }
 
+# True if something is listening on all interfaces (LAN bridge OK).
+ollama_mac_listens_lan() {
+  local port="${1:-11434}"
+  command -v lsof >/dev/null 2>&1 || return 1
+  lsof -nP -iTCP:"${port}" -sTCP:LISTEN 2>/dev/null | grep -qE '\*:'"${port}"'|0\.0\.0\.0:'"${port}"'
+}
+
+ollama_mac_api_ok() {
+  local base="${1:-http://127.0.0.1:11434}"
+  curl -sf --connect-timeout 2 "${base%/}/api/tags" >/dev/null 2>&1
+}
+
 # Start with OLLAMA_HOST set. Returns 0 on success.
 ollama_mac_start_lan() {
   local host_bind="${1:-0.0.0.0:11434}"

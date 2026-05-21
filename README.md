@@ -254,7 +254,9 @@ cp scripts/ci/remote-ollama.env.example scripts/ci/remote-ollama.env
 ./scripts/mac/diagnose_ollama_listen.sh   # should show *:11434 or 0.0.0.0:11434
 ```
 
-If `Ollama.app not found in /Applications`, the script also tries `~/Applications`, Spotlight, and `ollama serve` from PATH. Override: `OLLAMA_APP_PATH=/path/to/Ollama.app ./scripts/mac/restart_ollama_lan.sh`
+If `Ollama.app not found in /Applications`, the script also tries `~/Applications`, Spotlight, and `ollama serve` from PATH (common: `/opt/homebrew/bin/ollama`). Override: `OLLAMA_APP_PATH=/path/to/Ollama.app ./scripts/mac/restart_ollama_lan.sh`
+
+**Homebrew-only:** `export OLLAMA_HOST=0.0.0.0:11434 && ollama serve` (or `nohup ... &`). If `nohup` prints `exit 1` but `lsof` shows `*:11434` and `curl http://192.168.x.x:11434/api/tags` works, a server is already running — use `./scripts/mac/status_ollama_bridge.sh`.
 
 ### Cloud agent / Linux (local Ollama in the VM)
 

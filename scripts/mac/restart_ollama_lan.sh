@@ -2,23 +2,35 @@
 # Quit Ollama and relaunch with OLLAMA_HOST so LAN/Tailscale can connect.
 set -euo pipefail
 
-export OLLAMA_HOST="${OLLAMA_HOST:-0.0.0.0:11434}"
-launchctl setenv OLLAMA_HOST "${OLLAMA_HOST}" 2>/dev/null || true
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=_ollama_mac.sh
+source "$SCRIPT_DIR/_ollama_mac.sh"
+
+HOST_BIND="${OLLAMA_HOST:-0.0.0.0:11434}"
+
+# Optional override when app is not under /Applications
+if [[ -n "${OLLAMA_APP_PATH:-}" && -d "${OLLAMA_APP_PATH}" ]]; then
+  ollama_mac_find_app() { echo "${OLLAMA_APP_PATH}"; }
+fi
+
+echo "=== Restart Ollama (LAN bridge) ==="
+echo "OLLAMA_HOST=${HOST_BIND}"
+echo ""
 
 echo "Stopping Ollama..."
-osascript -e 'quit app "Ollama"' 2>/dev/null || true
-killall ollama 2>/dev/null || true
-sleep 2
+ollama_mac_stop
 
-echo "Starting Ollama with OLLAMA_HOST=${OLLAMA_HOST}"
-# Launch from this shell so the child inherits OLLAMA_HOST (Dock-only open often does not).
-if [[ -d "/Applications/Ollama.app" ]]; then
-  open -a Ollama --env OLLAMA_HOST="${OLLAMA_HOST}"
-else
-  echo "Ollama.app not found in /Applications — start Ollama manually after: export OLLAMA_HOST=${OLLAMA_HOST}"
+if ! ollama_mac_start_lan "$HOST_BIND"; then
   exit 1
 fi
 
-sleep 3
+echo "Waiting for API..."
+for _ in $(seq 1 20); do
+  if curl -sf --connect-timeout 2 "http://127.0.0.1:11434/api/tags" >/dev/null 2>&1; then
+    break
+  fi
+  sleep 1
+done
+
 echo ""
-"$(cd "$(dirname "$0")" && pwd)/diagnose_ollama_listen.sh"
+"$SCRIPT_DIR/diagnose_ollama_listen.sh"
