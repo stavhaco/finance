@@ -25,7 +25,7 @@ def format_ollama_help(base_url: str, model: str) -> str:
         "  Mac: open Ollama.app or run `ollama serve`, then `ollama pull "
         f"{model}`.\n"
         "  Linux/cloud agent: `./scripts/ci/setup_ollama.sh` then re-run.\n"
-        "  Remote Mac: set OLLAMA_BASE_URL=http://<your-mac>:11434 "
-        "(Ollama must listen on LAN; see README).\n"
+        "  Mac bridge: ./scripts/mac/enable_ollama_lan.sh then "
+        "OLLAMA_BASE_URL in scripts/ci/remote-ollama.env (see README).\n"
         "  CI without GPU: `DEMO_TRADER_DRY_RUN=1 python -m demo_trader --once --dry-run`."
     )

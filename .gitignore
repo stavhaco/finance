@@ -6,6 +6,7 @@ __pycache__/
 .venv/
 venv/
 data/
+scripts/ci/remote-ollama.env
 *.egg-info/
 dist/
 build/
