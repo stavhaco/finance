@@ -223,12 +223,24 @@ git pull origin main
 ./scripts/mac/show_ollama_bridge_url.sh     # pick a URL marked ✓ reachable
 ```
 
-Create `scripts/ci/remote-ollama.env` (gitignored) on any machine that runs the agent:
+Create `scripts/ci/remote-ollama.env` (gitignored) — **on the Mac** (auto-detect LAN/Tailscale):
+
+```bash
+./scripts/mac/init_remote_ollama_env.sh
+./scripts/ci/check_ollama_bridge.sh
+```
+
+Or explicitly:
+
+```bash
+OLLAMA_BASE_URL=http://192.168.3.29:11434 OLLAMA_MODEL=llama3.2 ./scripts/mac/init_remote_ollama_env.sh
+```
+
+Manual edit:
 
 ```bash
 cp scripts/ci/remote-ollama.env.example scripts/ci/remote-ollama.env
-# Edit: OLLAMA_BASE_URL=http://192.168.x.x:11434  (or Tailscale http://100.x.x.x:11434)
-#      OLLAMA_MODEL=llama3.2
+vim scripts/ci/remote-ollama.env
 ```
 
 **Test from the cloud agent** (or your laptop on the same network):
