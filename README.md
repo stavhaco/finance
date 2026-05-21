@@ -247,6 +247,15 @@ cp scripts/ci/remote-ollama.env.example scripts/ci/remote-ollama.env
 
 **Tailscale (recommended off-LAN):** install on Mac Mini, use the `Tailscale` URL from `show_ollama_bridge_url.sh`.
 
+**LAN shows ✗ but 127.0.0.1 works?** Ollama is still localhost-only. Run:
+
+```bash
+./scripts/mac/restart_ollama_lan.sh
+./scripts/mac/diagnose_ollama_listen.sh   # should show *:11434 or 0.0.0.0:11434
+```
+
+If `Ollama.app not found in /Applications`, the script also tries `~/Applications`, Spotlight, and `ollama serve` from PATH. Override: `OLLAMA_APP_PATH=/path/to/Ollama.app ./scripts/mac/restart_ollama_lan.sh`
+
 ### Cloud agent / Linux (local Ollama in the VM)
 
 ```bash

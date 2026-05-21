@@ -30,7 +30,10 @@ check_url() {
   if curl -sf --connect-timeout 3 "${url}/api/tags" >/dev/null 2>&1; then
     echo "             ✓ reachable from this Mac"
   else
-    echo "             ✗ not reachable (firewall / OLLAMA_HOST / wrong IP)"
+    echo "             ✗ not reachable"
+    echo "             → run: ./scripts/mac/diagnose_ollama_listen.sh"
+    echo "             → fix:  ./scripts/mac/restart_ollama_lan.sh (bind 0.0.0.0)"
+    echo "             → or macOS Firewall: allow incoming for Ollama"
   fi
 }
 
