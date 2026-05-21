@@ -31,6 +31,7 @@ from demo_trader.news_feeds import fetch_headlines, headlines_digest, mock_headl
 from demo_trader.cycle_log import write_cycle_report
 from demo_trader.dry_run import dry_run_decision
 from demo_trader.ollama_client import build_hebrew_trader_prompt, chat_json
+from demo_trader.ollama_health import format_ollama_help, ollama_reachable
 from demo_trader.paper_broker import Quote, execute_trade, portfolio_nav
 from demo_trader.sim_clock import advance_sim_now, load_sim_now
 from demo_trader.state_store import _utc_now_iso, load_state, save_state
@@ -307,6 +308,9 @@ def run_cycle(cfg: Config) -> int:
                 min_buys_when_trading=cfg.min_buys_when_trading,
             )
         else:
+            ok, detail = ollama_reachable(cfg.ollama_base_url)
+            if not ok:
+                raise ConnectionError(f"{detail}\n{format_ollama_help(cfg.ollama_base_url, cfg.ollama_model)}")
             decision = chat_json(
                 base_url=cfg.ollama_base_url,
                 model=cfg.ollama_model,

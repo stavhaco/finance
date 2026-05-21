@@ -199,16 +199,33 @@ With `DEMO_TRADER_ENFORCE_TASE_HOURS=1`, buys/sells run only **Sun–Thu 09:00�
 PYTHONPATH=. python -m unittest discover -s tests -v
 ```
 
-## Agent / CI dry-run (no Ollama)
+## Ollama (Mac vs cloud agent)
 
-Cloud agents and CI can run a full cycle (ingest, prices, paper broker, cycle JSON log) without a local LLM:
+The bot calls **`OLLAMA_BASE_URL`** (default `http://127.0.0.1:11434`). Ollama is a **separate process** — not bundled with this repo.
+
+| Environment | What was wrong | Fix |
+|-------------|----------------|-----|
+| **Cloud agent VM** | Nothing listening on port 11434 | Install + start Ollama in the VM (see below). |
+| **Your Mac Mini** | Ollama.app not running, or wrong model name | Start Ollama; `ollama pull llama3.2` (or match `OLLAMA_MODEL` in `demo-trader.env`). |
+| **Agent → your Mac** | Agent cannot reach `127.0.0.1` on your machine | Set `OLLAMA_BASE_URL=http://<Mac-LAN-IP>:11434` and run Ollama with `OLLAMA_HOST=0.0.0.0` (only on a trusted network). |
+
+### Cloud agent / Linux (local Ollama in the VM)
+
+```bash
+./scripts/ci/setup_ollama.sh          # install, ollama serve, pull llama3.2:1b
+./scripts/ci/run_cycle_ollama.sh      # one real LLM cycle
+```
+
+Override model: `OLLAMA_MODEL=llama3.2 ./scripts/ci/setup_ollama.sh` (larger, slower).
+
+### Agent / CI dry-run (no Ollama)
 
 ```bash
 ./scripts/ci/run_cycle_dry.sh
 # or: DEMO_TRADER_DRY_RUN=1 python -m demo_trader --once --dry-run
 ```
 
-Production on your Mac Mini should use real Ollama (`--dry-run` off).
+Production on your Mac Mini: `./scripts/mac/run_cycle.sh` with Ollama running locally (`--dry-run` off).
 
 ## Limitations
 
