@@ -24,6 +24,14 @@ def _last_price(t: yf.Ticker) -> float | None:
     return None
 
 
+def _price_ils(last: float, currency: str | None) -> float:
+    """Yahoo often quotes Israeli stocks in agorot (ILA); convert to shekels for NAV/trades."""
+    px = float(last)
+    if currency == "ILA":
+        return px / 100.0
+    return px
+
+
 def fetch_last_prices(symbols: Iterable[str]) -> dict[str, Quote]:
     syms = list(dict.fromkeys(symbols))
     out: dict[str, Quote] = {}
@@ -37,9 +45,10 @@ def fetch_last_prices(symbols: Iterable[str]) -> dict[str, Quote]:
             cur = t.fast_info.get("currency")
         except Exception:
             cur = None
-        if cur == "ILA":
-            cur = "ILS"
-        out[sym] = Quote(symbol=sym, last=float(last), currency=str(cur) if cur else None)
+        raw_cur = str(cur) if cur else None
+        px_ils = _price_ils(float(last), raw_cur)
+        display_cur = "ILS" if raw_cur in {"ILA", "ILS"} else (raw_cur or "ILS")
+        out[sym] = Quote(symbol=sym, last=px_ils, currency=display_cur)
     return out
 
 

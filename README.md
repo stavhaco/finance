@@ -29,6 +29,58 @@ Data defaults:
 |------|---------|
 | `data/trader.db` | SQLite: knowledge, cycles, decisions, price bars |
 | `data/paper_state.json` | Paper portfolio + benchmark session |
+| `data/logs/cycles/` | Per-cycle JSON audit (prompt inputs, model output, executions) |
+
+## Per-cycle logs (what the model saw and did)
+
+Each `python -m demo_trader --once` run can write a JSON report under `data/logs/cycles/` (enabled by default):
+
+```bash
+ls -lt data/logs/cycles/
+cat data/logs/cycles/cycle_00042_2026-05-19T10-30-00.json | python3 -m json.tool | less
+```
+
+Typical fields:
+
+| Field | Meaning |
+|-------|---------|
+| `cycle_id`, `ts_utc`, `mode` | DB cycle id, timestamp, `live` or `simulation` |
+| `ingest` | RSS/Maya counts ingested this cycle |
+| `performance_before` / `performance_after` | NAV, return vs benchmark |
+| `portfolio_after` | Cash %, positions (includes `cash_pct_of_nav`, deployment target) |
+| `prompt.sections` | Each input block sent to Ollama (`preview` + optional `full`) |
+| `model_response` | Parsed JSON from Ollama (`analysis_he`, `trades`, …) |
+| `executions` | What the bot recorded (fills, skips, `reason_he`) |
+
+Env vars:
+
+| Variable | Default | Meaning |
+|----------|---------|---------|
+| `DEMO_TRADER_CYCLE_LOG_ENABLED` | `1` | Write cycle JSON files |
+| `DEMO_TRADER_CYCLE_LOG_DIR` | `data/logs/cycles` | Output directory |
+| `DEMO_TRADER_CYCLE_LOG_FULL_PROMPTS` | `0` | If `1`, store full prompt text (large files) |
+
+SQLite still holds the authoritative audit: `cycles`, `decisions` (query with `sqlite3 data/trader.db`).
+
+## Deploy capital (encourage buys, low cash)
+
+The Hebrew prompt tells the model to keep cash low when trading is allowed and to suggest modest **buy** trades across several TA-35 names (not leave most NAV in cash).
+
+| Variable | Default | Meaning |
+|----------|---------|---------|
+| `DEMO_TRADER_MAX_CASH_PCT_TARGET` | `15` | If `cash_pct_of_nav` is above this and TASE window is open, prompt asks for buys |
+| `DEMO_TRADER_MIN_BUYS_WHEN_TRADING` | `1` | Minimum buy trades to suggest in that case |
+| `DEMO_TRADER_MAX_TRADES_PER_CYCLE` | `5` | Cap on trades executed per cycle |
+
+Example (more aggressive, still modest size per trade):
+
+```bash
+export DEMO_TRADER_MAX_CASH_PCT_TARGET=10
+export DEMO_TRADER_MIN_BUYS_WHEN_TRADING=2
+export DEMO_TRADER_MAX_TRADES_PER_CYCLE=5
+```
+
+Yahoo sometimes quotes Israeli tickers in **agorot** (`ILA`); the bot converts to shekels for NAV and orders. If an old `paper_state.json` was built with wrong prices, start a fresh session or reset state after pulling this fix.
 
 ## Run reliably on a Mac Mini (outside the Python loop)
 
@@ -124,7 +176,12 @@ python -m demo_trader --once
 | `DEMO_TRADER_STARTING_CASH_ILS` | `100000` |
 | `DEMO_TRADER_WATCHLIST` | all TA-35 catalog symbols |
 | `DEMO_TRADER_DB_PATH` | `data/trader.db` |
-| `DEMO_TRADER_MAX_TRADES_PER_CYCLE` | `3` |
+| `DEMO_TRADER_MAX_TRADES_PER_CYCLE` | `5` |
+| `DEMO_TRADER_MAX_CASH_PCT_TARGET` | `15` |
+| `DEMO_TRADER_MIN_BUYS_WHEN_TRADING` | `1` |
+| `DEMO_TRADER_CYCLE_LOG_ENABLED` | `1` |
+| `DEMO_TRADER_CYCLE_LOG_DIR` | `data/logs/cycles` |
+| `DEMO_TRADER_CYCLE_LOG_FULL_PROMPTS` | `0` |
 
 ## Tests (no LLM)
 

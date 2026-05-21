@@ -159,13 +159,17 @@ def build_hebrew_trader_prompt(
     news_text: str,
     article_context_en: str = "",
     max_trades: int,
+    max_cash_pct_target: float = 15.0,
+    min_buys_when_trading: int = 1,
 ) -> tuple[str, str]:
     system = (
         "אתה סוחר ניירות (paper trading) זהיר בשוק הישראלי. "
         "עליך להחזיר JSON בלבד (בלי markdown). "
         "המטרה: להשוות ביצועים למדד ת\"א-35 (פרוקסי דרך Yahoo Finance). "
         "אין לך ספר פקודות אמיתי; אל תבטיח רווחים. "
-        "השתמש בעברית בשדות rationale/analysis/reason."
+        "השתמש בעברית בשדות rationale/analysis/reason. "
+        "כשמותר לסחור: העדף להחזיק מזומן נמוך — פרוס הון על מניות TA-35 בגודל מתון (סיכון נמוך), "
+        "לא להשאיר את רוב התיק במזומן לאורך זמן."
     )
     gate = "כן" if trading_allowed else "לא"
     user = f"""האם כרגע מותר לבצע פעולות מסחר (חלון מסחר פשוט בת\"א)? {gate}
@@ -218,9 +222,11 @@ Enriched knowledge center (English; full translation + executive summary stored 
 
 חוקים:
 - trades: לכל היותר {max_trades} עסקאות
-- אם stance הוא hold לכל השמות, מותר שמערך העסקאות יהיה ריק
 - אם אסור מסחר כרגע (לא), החזר trades ריק בכל מקרה, אבל עדיין מלא analysis_he ו-by_symbol
-- side רק buy או sell
-- qty חיובי
+- אם מותר לסחור (כן) ו-cash_pct_of_nav מעל {max_cash_pct_target:.0f}%: הצע לפחות {min_buys_when_trading} קנייה/ות buy בגודל מתון
+  ב-{max_trades} מניות שונות (פיזור), לא "הכל או כלום". מכירות sell רק אם יש סיבה ברורה.
+- סיכון נמוך: עדיף כמה פוזיציות קטנות מאשר hold מלא עם מזומן גבוה
+- לכל trade חובה reason_he בעברית (לא רק "מודל")
+- side רק buy או sell; qty חיובי (מניות שלמות, לא חלקי מניה)
 """
     return system, user

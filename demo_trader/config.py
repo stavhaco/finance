@@ -81,7 +81,11 @@ class Config:
             )
         )
     )
-    max_trades_per_cycle: int = field(default_factory=lambda: max(1, _env_int("DEMO_TRADER_MAX_TRADES_PER_CYCLE", 3)))
+    max_trades_per_cycle: int = field(default_factory=lambda: max(1, _env_int("DEMO_TRADER_MAX_TRADES_PER_CYCLE", 5)))
+    max_cash_pct_target: float = field(
+        default_factory=lambda: min(50.0, max(5.0, _env_float("DEMO_TRADER_MAX_CASH_PCT_TARGET", 15.0)))
+    )
+    min_buys_when_trading: int = field(default_factory=lambda: max(0, _env_int("DEMO_TRADER_MIN_BUYS_WHEN_TRADING", 1)))
     max_position_pct: float = field(
         default_factory=lambda: min(100.0, max(1.0, _env_float("DEMO_TRADER_MAX_POSITION_PCT", 25.0)))
     )
@@ -142,6 +146,11 @@ class Config:
 
     sim_skip_closed_hours: bool = field(
         default_factory=lambda: _env_bool("DEMO_TRADER_SIM_SKIP_CLOSED_HOURS", True)
+    )
+    cycle_log_enabled: bool = field(default_factory=lambda: _env_bool("DEMO_TRADER_CYCLE_LOG_ENABLED", True))
+    cycle_log_dir: str = field(default_factory=lambda: _env_str("DEMO_TRADER_CYCLE_LOG_DIR", "data/logs/cycles"))
+    cycle_log_full_prompts: bool = field(
+        default_factory=lambda: _env_bool("DEMO_TRADER_CYCLE_LOG_FULL_PROMPTS", True)
     )
 
     def rss_feeds(self) -> Sequence[str]:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 import time
 import traceback
@@ -27,6 +28,7 @@ from demo_trader.knowledge_ingest import ingest_headlines, ingest_maya_rows
 from demo_trader.market_data import fetch_last_prices, prices_map
 from demo_trader.maya_client import maya_digest_for_prompt, normalize_maya_items
 from demo_trader.news_feeds import fetch_headlines, headlines_digest, mock_headlines
+from demo_trader.cycle_log import write_cycle_report
 from demo_trader.ollama_client import build_hebrew_trader_prompt, chat_json
 from demo_trader.paper_broker import Quote, execute_trade, portfolio_nav
 from demo_trader.sim_clock import advance_sim_now, load_sim_now
@@ -52,8 +54,15 @@ def _fmt_perf(p) -> str:
     )
 
 
-def _portfolio_text(state, prices: dict[str, float]) -> str:
-    lines = [f"cash_ils: {state.cash_ils:,.2f}"]
+def _portfolio_text(state, prices: dict[str, float], cfg: Config) -> str:
+    nav = portfolio_nav(state, prices)
+    cash_pct = (float(state.cash_ils) / nav * 100.0) if nav > 0 else 100.0
+    lines = [
+        f"cash_ils: {state.cash_ils:,.2f}",
+        f"nav_ils: {nav:,.2f}",
+        f"cash_pct_of_nav: {cash_pct:.1f}%",
+        f"deployment_target: keep cash below ~{cfg.max_cash_pct_target:.0f}% when trading is allowed",
+    ]
     if not state.positions:
         lines.append("positions: (none)")
     else:
@@ -247,6 +256,8 @@ def run_cycle(cfg: Config) -> int:
     if article_context_en and not article_context_en.startswith("(No enriched"):
         print(f"knowledge_digest_en: {len(article_context_en)} chars", flush=True)
 
+    portfolio_text = _portfolio_text(state, prices, cfg)
+
     system, user = build_hebrew_trader_prompt(
         watchlist=cfg.watchlist,
         trading_allowed=trading_allowed,
@@ -255,14 +266,24 @@ def run_cycle(cfg: Config) -> int:
         fundamentals_digest=fundamentals_digest,
         maya_digest=maya_digest,
         quotes_text=_quotes_text(quotes),
-        portfolio_text=_portfolio_text(state, prices),
+        portfolio_text=portfolio_text,
         news_text=news_block,
         article_context_en=article_context_en,
         max_trades=cfg.max_trades_per_cycle,
+        max_cash_pct_target=cfg.max_cash_pct_target,
+        min_buys_when_trading=cfg.min_buys_when_trading,
     )
 
     pending: list[dict[str, Any]] = []
     audit_ts = sim_ts_label if cfg.simulation and sim_ts_label else None
+
+    cycle_log_holder: dict[str, Any] = {
+        "system": system,
+        "user": user,
+        "portfolio_text": portfolio_text,
+        "decision": None,
+        "error": None,
+    }
 
     try:
         decision = chat_json(
@@ -313,9 +334,29 @@ def run_cycle(cfg: Config) -> int:
         )
         state.last_cycle_ts = audit_ts or _utc_now_iso()
         save_state(path, state)
+        cycle_log_holder["error"] = str(e)[:2000]
+        if cfg.cycle_log_enabled:
+            ts_log = audit_ts or _utc_now_iso()
+            report = {
+                "cycle_id": cycle_id,
+                "ts_utc": ts_log,
+                "mode": "simulation" if cfg.simulation else "live",
+                "model_error": cycle_log_holder["error"],
+                "prompt": {"sections": {"system": system, "user": user}},
+                "performance_before": {"nav_ils": perf_pre.nav_ils},
+            }
+            log_path = write_cycle_report(
+                log_dir=cfg.cycle_log_dir,
+                cycle_id=cycle_id,
+                ts_utc_iso=ts_log,
+                payload=report,
+                include_full_prompts=cfg.cycle_log_full_prompts,
+            )
+            print(f"cycle log: {log_path}", flush=True)
         return 3
 
     analysis_he = str(decision.get("analysis_he", "")).strip()
+    cycle_log_holder["decision"] = decision
 
     pending.append(
         {
@@ -540,6 +581,79 @@ def run_cycle(cfg: Config) -> int:
             broker_message=row.get("broker_message"),
             ts_utc_iso=audit_ts,
         )
+
+    if cfg.cycle_log_enabled:
+        ts_log = audit_ts or _utc_now_iso()
+        executions = [
+            {
+                "kind": row.get("kind"),
+                "symbol": row.get("symbol"),
+                "side": row.get("side"),
+                "qty": row.get("qty"),
+                "executed": row.get("executed"),
+                "broker_message": row.get("broker_message"),
+                "reason_he": row.get("reason_he"),
+                "analysis_he": row.get("analysis_he"),
+            }
+            for row in pending
+        ]
+        report = {
+            "cycle_id": cycle_id,
+            "ts_utc": ts_log,
+            "mode": "simulation" if cfg.simulation else "live",
+            "sim_now_utc": sim_now.isoformat() if sim_now is not None else None,
+            "ollama_model": cfg.ollama_model,
+            "trading_allowed": trading_allowed,
+            "ingest": {
+                "rss_headlines": len(headlines),
+                "rss_db_new": inserted,
+                "maya_rows": len(maya_rows),
+                "maya_db_new": maya_inserted,
+            },
+            "performance_before": {
+                "nav_ils": perf_pre.nav_ils,
+                "portfolio_return_pct": perf_pre.portfolio_return_pct,
+                "benchmark_return_pct": perf_pre.benchmark_return_pct,
+                "alpha_pct": perf_pre.alpha_vs_benchmark_pct,
+            },
+            "performance_after": {
+                "nav_ils": perf_post.nav_ils,
+                "portfolio_return_pct": perf_post.portfolio_return_pct,
+                "benchmark_return_pct": perf_post.benchmark_return_pct,
+                "alpha_pct": perf_post.alpha_vs_benchmark_pct,
+            },
+            "portfolio_after": _portfolio_text(state, prices_end, cfg),
+            "prompt": {
+                "ollama_model": cfg.ollama_model,
+                "trading_allowed": trading_allowed,
+                "max_cash_pct_target": cfg.max_cash_pct_target,
+                "min_buys_when_trading": cfg.min_buys_when_trading,
+                "sections": {
+                    "system": cycle_log_holder["system"],
+                    "user": cycle_log_holder["user"],
+                    "catalog": catalog_digest,
+                    "knowledge_he": knowledge_digest,
+                    "fundamentals": fundamentals_digest,
+                    "maya_headlines": maya_digest,
+                    "quotes": _quotes_text(quotes),
+                    "portfolio": cycle_log_holder["portfolio_text"],
+                    "news_headlines": news_block,
+                    "knowledge_en": article_context_en,
+                },
+            },
+            "model_response": cycle_log_holder.get("decision"),
+            "model_error": cycle_log_holder.get("error"),
+            "executions": executions,
+            "executed_trade_count": executed,
+        }
+        log_path = write_cycle_report(
+            log_dir=cfg.cycle_log_dir,
+            cycle_id=cycle_id,
+            ts_utc_iso=ts_log,
+            payload=report,
+            include_full_prompts=cfg.cycle_log_full_prompts,
+        )
+        print(f"cycle log: {log_path}", flush=True)
 
     if analysis_he:
         print("model analysis (he):")
