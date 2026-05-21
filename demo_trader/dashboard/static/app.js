@@ -1,4 +1,5 @@
-let allocChart = null;
+const BAR_COLORS = ["#3d8bfd", "#3dd68c", "#f0b429", "#b388ff", "#ff7eb9", "#6ee7b7", "#8899aa"];
+let refreshTimerId = null;
 
 function fmtIls(n) {
   if (n == null || Number.isNaN(n)) return "—";
@@ -28,12 +29,6 @@ function daysParam() {
   return document.getElementById("days").value;
 }
 
-async function fetchJson(url) {
-  const r = await fetch(url);
-  if (!r.ok) throw new Error(`${r.status} ${url}`);
-  return r.json();
-}
-
 function escapeHtml(s) {
   if (s == null) return "";
   return String(s)
@@ -43,10 +38,29 @@ function escapeHtml(s) {
     .replace(/"/g, "&quot;");
 }
 
+async function fetchJson(url) {
+  const r = await fetch(url);
+  if (!r.ok) throw new Error(`${r.status} ${url}`);
+  return r.json();
+}
+
 function setStatus(msg, err = false) {
   const el = document.getElementById("status");
   el.textContent = msg;
   el.style.color = err ? "#f66d6d" : "";
+}
+
+function setSvBanner(msg, asError = false) {
+  const b = document.getElementById("sv-error");
+  if (!b) return;
+  if (!msg) {
+    b.hidden = true;
+    b.textContent = "";
+    return;
+  }
+  b.hidden = false;
+  b.textContent = msg;
+  b.classList.toggle("is-error", asError);
 }
 
 function setSvStatus(msg, err = false) {
@@ -61,38 +75,61 @@ function activeTabId() {
   return t ? t.dataset.tab : "portfolio";
 }
 
+function restartAutoRefresh() {
+  if (refreshTimerId) clearInterval(refreshTimerId);
+  refreshTimerId = null;
+  const box = document.getElementById("auto-refresh");
+  if (!box || !box.checked) return;
+  refreshTimerId = setInterval(refreshMainData, 120_000);
+}
+
+function renderAllocationBars(nav, rows) {
+  const root = document.getElementById("alloc-bars");
+  const n = Number(nav) || 0;
+  if (!rows || !rows.length || n <= 0) {
+    root.innerHTML = "<p class='muted'>No NAV data.</p>";
+    return;
+  }
+  const lines = [];
+  rows.forEach((row, idx) => {
+    const lab = escapeHtml(row.label || row.symbol || "?");
+    const v = Number(row.value_ils);
+    const pctRaw = Math.max(0, (v / n) * 100);
+    const pct = Math.min(100, pctRaw).toFixed(1);
+    const col = BAR_COLORS[idx % BAR_COLORS.length];
+    lines.push(`
+      <div class="allo-row">
+        <div class="allo-meta"><span class="allo-label">${lab}</span><span class="allo-pct">${pct}% · ${fmtIls(v)}</span></div>
+        <div class="allo-track"><div class="allo-fill" style="width:${pct}%;background:${col}"></div></div>
+      </div>`);
+  });
+  root.innerHTML = lines.join("");
+}
+
 function renderPortfolio(p) {
   const sess = p.session || {};
   const cards = document.getElementById("summary-cards");
   const ret = p.portfolio_return_pct != null ? fmtPct(p.portfolio_return_pct) : "—";
   const alpha = p.alpha_pct != null ? fmtPct(p.alpha_pct) : "—";
+  const benchLine = sess.benchmark_label || sess.benchmark_symbol || "TA35.TA";
   cards.innerHTML = `
     <div class="card"><div class="label">NAV</div><div class="value">${fmtIls(p.nav_ils)}</div><div class="sub">session start ${fmtIls(sess.initial_nav_ils)}</div></div>
     <div class="card"><div class="label">Return vs session</div><div class="value">${ret}</div><div class="sub">α vs TA-35 ${alpha}</div></div>
     <div class="card"><div class="label">Cash</div><div class="value">${fmtIls(p.cash_ils)}</div><div class="sub">${p.cash_pct}% of NAV</div></div>
-    <div class="card"><div class="label">Benchmark</div><div class="value">${sess.benchmark_symbol || "TA35.TA"}</div><div class="sub">TA-35 ${fmtPct(p.benchmark_return_pct)} · start ${sess.benchmark_start_px ?? "—"}</div></div>
+    <div class="card"><div class="label">Benchmark</div><div class="value" style="font-size:1rem">${escapeHtml(String(benchLine))}</div><div class="sub">${fmtPct(p.benchmark_return_pct)} · start ${sess.benchmark_start_px ?? "—"}</div></div>
   `;
 
   const tbody = document.querySelector("#positions-table tbody");
   tbody.innerHTML = (p.positions || [])
     .map(
       (row) =>
-        `<tr><td>${escapeHtml(row.symbol)}</td><td>${escapeHtml(String(row.qty))}</td><td>${row.last_price ?? "—"}</td><td>${fmtIls(row.market_value_ils)}</td></tr>`
+        `<tr><td>${escapeHtml(row.company_label || row.symbol)}</td><td><code>${escapeHtml(row.symbol)}</code></td><td>${escapeHtml(
+          String(row.qty)
+        )}</td><td>${row.last_price ?? "—"}</td><td>${fmtIls(row.market_value_ils)}</td></tr>`
     )
     .join("");
 
-  const labels = (p.allocation || []).map((a) => a.label);
-  const values = (p.allocation || []).map((a) => a.value_ils);
-  const ctx = document.getElementById("alloc-chart");
-  if (allocChart) allocChart.destroy();
-  allocChart = new Chart(ctx, {
-    type: "doughnut",
-    data: {
-      labels,
-      datasets: [{ data: values, backgroundColor: ["#3d8bfd", "#3dd68c", "#f0b429", "#b388ff", "#ff7eb9", "#6ee7b7"] }],
-    },
-    options: { plugins: { legend: { position: "bottom", labels: { color: "#8b9cb3" } } } },
-  });
+  renderAllocationBars(p.nav_ils, p.allocation || []);
 }
 
 function renderCycles(data) {
@@ -107,32 +144,47 @@ function renderCycles(data) {
       const openCls = c.market_open ? "open" : "closed";
       const openLbl = c.market_open ? "Market open" : "Market closed";
       const perf = `Portfolio ${fmtPct(c.portfolio_return_pct)} · TA-35 ${fmtPct(c.benchmark_return_pct)} · α ${fmtPct(c.alpha_pct)}`;
+      const benchLbl = c.benchmark_label ? ` · bench: ${escapeHtml(c.benchmark_label)}` : "";
+      const nar = (c.summary_he || "").trim();
+      const narrBlock =
+        nar.length === 0
+          ? ""
+          : `<details class="cycle-narr"><summary>Narrative from model (${nar.length.toLocaleString()} chars)</summary><pre class="rationale-pre">${escapeHtml(
+              nar
+            )}</pre></details>`;
       const actions = (c.actions || [])
         .map((a) => {
+          const rl = escapeHtml((a.reason_he || "").trim());
+          const rlBlock =
+            rl.length === 0
+              ? `<p class="muted">No rationale text stored for this row.</p>`
+              : `<pre class="rationale-pre tight">${rl}</pre>`;
+          const who = escapeHtml(a.company_label || a.symbol || "");
           if (a.type === "trade") {
             const side = (a.side || "").toLowerCase();
-            return `<div class="action"><span class="side-${side}">${escapeHtml(a.side)} ${escapeHtml(a.symbol)} ×${escapeHtml(String(a.qty))}</span> — ${escapeHtml(a.reason_he || "")}</div>`;
+            return `<div class="action"><div><span class="side-${side}">${escapeHtml(a.side)}</span> · <strong>${who}</strong> ×${escapeHtml(
+              String(a.qty ?? "")
+            )}</div>${rlBlock}</div>`;
           }
           if (a.type === "blocked") {
-            return `<div class="action">⏸ Blocked ${escapeHtml(a.side || "")} ${escapeHtml(a.symbol || "")} — ${escapeHtml(a.reason_he || "after hours")}</div>`;
+            return `<div class="action"><div>Blocked ${escapeHtml(a.side || "")} · <strong>${who}</strong></div>${rlBlock}</div>`;
           }
           if (a.type === "hold") {
-            return `<div class="action">Hold — ${escapeHtml(a.reason_he || "")}</div>`;
+            return `<div class="action">${rlBlock}</div>`;
           }
-          return `<div class="action">${escapeHtml(a.type)} ${escapeHtml(a.symbol || "")} — ${escapeHtml(a.reason_he || "")}</div>`;
+          return `<div class="action"><div>${escapeHtml(a.type)} ${who}</div>${rlBlock}</div>`;
         })
         .join("");
-      const summary = c.summary_he ? `<p class="muted">${escapeHtml(c.summary_he)}</p>` : "";
       return `
         <article class="cycle">
           <div class="cycle-head">
             <span class="ts">#${c.cycle_id} · ${escapeHtml(c.ts)}</span>
             <span class="badge ${openCls}">${openLbl}</span>
-            <span class="badge">${c.executed_trades} executed</span>
-            <span class="muted">${perf}</span>
+            <span class="badge">${c.executed_trades} executed trades</span>
+            <span class="muted">${perf}${benchLbl}</span>
           </div>
-          ${summary}
-          ${actions || "<p class='muted'>No trades this cycle.</p>"}
+          ${narrBlock}
+          ${actions || "<p class='muted'>Nothing recorded this cycle.</p>"}
         </article>`;
     })
     .join("");
@@ -150,32 +202,17 @@ function renderKnowledge(data) {
       const title = k.title_en || k.title;
       const sum = k.executive_summary_en || "(no summary yet)";
       const flash = k.is_maya_flash ? '<span class="badge open">Maya flash</span>' : "";
+      const match = k.matched_company_label || k.matched_symbol || "—";
       return `
         <article class="k-item">
           <h3>${escapeHtml(title)}</h3>
-          <div class="k-meta">${escapeHtml(k.event_time || k.ts)} · ${escapeHtml(k.source)} · ${escapeHtml(k.matched_symbol || "—")}
+          <div class="k-meta">${escapeHtml(k.event_time || k.ts)} · ${escapeHtml(k.source)} · matched: ${escapeHtml(match)}
             · ${escapeHtml(k.sentiment || "—")} · ${escapeHtml(k.trade_usefulness || "—")} ${flash}</div>
           <p class="k-summary">${escapeHtml(sum)}</p>
-          ${k.url ? `<p class="muted"><a href="${escapeHtml(k.url)}" target="_blank" rel="noopener">source</a></p>` : ""}
+          ${k.url ? `<p class="muted"><a href="${escapeHtml(k.url)}" target="_blank" rel="noopener">Open source link</a></p>` : ""}
         </article>`;
     })
     .join("");
-}
-
-function formatPromptSectionBody(v) {
-  if (v == null) return "";
-  if (typeof v === "string") return v;
-  if (typeof v === "object") {
-    const meta = [];
-    if (v.chars != null) meta.push(`${v.chars} chars`);
-    if (v.lines != null) meta.push(`${v.lines} lines`);
-    const prev = v.preview != null ? String(v.preview) : "";
-    const full = v.full != null ? String(v.full) : "";
-    const head = meta.length ? `# ${meta.join(", ")}\n\n` : "";
-    if (full && full !== prev) return `${head}${prev}\n\n— full —\n\n${full}`;
-    return head + prev;
-  }
-  return JSON.stringify(v, null, 2);
 }
 
 function renderSupervisionOverview(ov) {
@@ -184,207 +221,212 @@ function renderSupervisionOverview(ov) {
   const st = paths.state || {};
   const cards = `
     <section class="cards" style="margin-bottom:1rem">
-      <div class="card"><div class="label">SQLite DB</div><div class="value" style="font-size:0.95rem">${escapeHtml(paths.db_path || "")}</div>
-        <div class="sub">${db.exists ? fmtBytes(db.bytes) + " · " + escapeHtml(db.modified || "") : "missing"}</div></div>
-      <div class="card"><div class="label">Paper state JSON</div><div class="value" style="font-size:0.95rem">${escapeHtml(paths.state_path || "")}</div>
-        <div class="sub">${st.exists ? fmtBytes(st.bytes) + " · " + escapeHtml(st.modified || "") : "missing"}</div></div>
-      <div class="card"><div class="label">Cycle log directory</div><div class="value" style="font-size:0.95rem">${escapeHtml(paths.cycle_log_dir || "")}</div>
-        <div class="sub">${paths.cycle_log_dir_exists ? `${paths.cycle_log_file_count} files · listed ${fmtBytes(paths.cycle_log_listed_bytes_sum)}` : "missing"}</div></div>
+      <div class="card"><div class="label">SQLite</div><div class="value mono-sm">${escapeHtml(paths.db_path || "")}</div>
+        <div class="sub">${db.exists ? `${fmtBytes(db.bytes)} · ${escapeHtml(db.modified || "")}` : "missing"}</div></div>
+      <div class="card"><div class="label">Paper state JSON</div><div class="value mono-sm">${escapeHtml(paths.state_path || "")}</div>
+        <div class="sub">${st.exists ? `${fmtBytes(st.bytes)}` : "missing"}</div></div>
+      <div class="card"><div class="label">Cycle logs folder</div><div class="value mono-sm">${escapeHtml(paths.cycle_log_dir || "")}</div>
+        <div class="sub">${paths.cycle_log_dir_exists ? `${paths.cycle_log_file_count} files · ${fmtBytes(
+          paths.cycle_logs_listed_byte_sum
+        )} (sample sum)` : "missing"}</div></div>
     </section>`;
 
-  const tblRows = (ov.sqlite_tables || [])
+  const rows = (ov.sqlite_tables || [])
     .map(
-      (r) =>
-        `<tr><td><code>${escapeHtml(r.name)}</code></td><td>${r.rows}</td><td class="muted">${escapeHtml(r.purpose || "")}</td></tr>`
+      (t) =>
+        `<tr><td><code>${escapeHtml(t.name)}</code></td><td>${t.rows}</td><td class="muted">${escapeHtml(t.purpose || "")}</td></tr>`
     )
     .join("");
-  const table = `
-    <section>
-      <h2>SQLite tables</h2>
-      <div class="sv-scroll">
-        <table class="sv-table"><thead><tr><th>Table</th><th>Rows</th><th>Role</th></tr></thead>
-        <tbody>${tblRows || "<tr><td colspan='3' class='muted'>No database</td></tr>"}</tbody></table>
-      </div>
-    </section>`;
 
-  const flow = (ov.data_flow || []).map((line) => `<li>${escapeHtml(line)}</li>`).join("");
+  const notes = (ov.notes || []).map((line) => `<li>${escapeHtml(line)}</li>`).join("");
   const mr = ov.model_runtime || {};
-  const mrDl = Object.keys(mr)
+  const modelDl = Object.keys(mr)
     .map((k) => `<dt>${escapeHtml(k)}</dt><dd><code>${escapeHtml(JSON.stringify(mr[k]))}</code></dd>`)
     .join("");
 
   document.getElementById("sv-overview").innerHTML = `
     ${cards}
-    ${table}
+    <section>
+      <h2>SQLite tables</h2>
+      <div class="sv-scroll sv-table-wrap"><table><thead><tr><th>Name</th><th>Rows</th><th>Notes</th></tr></thead>
+      <tbody>${rows || `<tr><td colspan="3" class="muted">(no tables)</td></tr>`}</tbody></table></div>
+    </section>
     <section style="margin-top:1rem">
-      <h2>What each cycle touches</h2>
-      <ul class="muted">${flow}</ul>
-      <h3>Model / runtime (from current process env)</h3>
-      <p class="muted">Values reflect the dashboard server’s <code>Config()</code>, not necessarily the host that last ran <code>demo_trader</code>.</p>
-      <dl class="sv-dl">${mrDl}</dl>
+      <h2>Operator notes</h2>
+      <ul class="muted">${notes}</ul>
+      <h3>Trader config snapshot (dashboard process)</h3>
+      <dl class="sv-dl">${modelDl}</dl>
     </section>`;
 }
 
-function fillCycleSelect(logs) {
+function fillCycleSelect(files) {
   const sel = document.getElementById("sv-cycle-select");
-  const cur = sel.value;
-  sel.innerHTML = '<option value="">— pick cycle —</option>';
-  for (const row of logs || []) {
+  const keep = sel.value;
+  sel.innerHTML = '<option value="">— choose —</option>';
+  for (const row of files || []) {
     if (!row.cycle_id) continue;
     const o = document.createElement("option");
     o.value = String(row.cycle_id);
-    o.textContent = `#${row.cycle_id} · ${row.filename} (${fmtBytes(row.bytes)})`;
+    o.textContent = `#${row.cycle_id} · ${row.filename}`;
     sel.appendChild(o);
   }
-  if (logs.some((r) => String(r.cycle_id) === cur)) sel.value = cur;
+  const ok = Array.from(sel.options).some((o) => o.value === keep);
+  if (ok) sel.value = keep;
 }
 
-function renderLogTable(logs) {
-  const rows = (logs || [])
+function renderLogTable(files) {
+  const tbody = (files || [])
     .map((r) => {
-      const id = r.cycle_id || 0;
+      const cid = r.cycle_id || 0;
       return `<tr>
-        <td><code>${id}</code></td>
-        <td class="muted" style="font-size:0.8rem">${escapeHtml(r.filename || "")}</td>
+        <td><code>${cid}</code></td>
+        <td class="muted mono-xs">${escapeHtml(r.filename)}</td>
         <td>${fmtBytes(r.bytes)}</td>
-        <td class="muted" style="font-size:0.78rem">${escapeHtml(r.modified || "")}</td>
-        <td><button type="button" class="sv-linkish" data-cycle="${id}">Inspect</button></td>
-      </tr>`;
+        <td><button type="button" class="link-btn" data-cycle="${cid}">Inspect</button></td></tr>`;
     })
     .join("");
   document.getElementById("sv-log-table").innerHTML = `
-    <div class="sv-scroll">
-      <table class="sv-table"><thead><tr><th>Id</th><th>File</th><th>Size</th><th>Modified</th><th></th></tr></thead>
-      <tbody>${rows || "<tr><td colspan='5' class='muted'>No cycle JSON files found.</td></tr>"}</tbody></table>
-    </div>`;
+    <div class="sv-scroll sv-table-wrap">
+      <table><thead><tr><th>Cycle</th><th>Filename</th><th>Size</th><th></th></tr></thead>
+      <tbody>${tbody || `<tr><td colspan="4" class="muted">No cycle_*.json files found.</td></tr>`}</tbody></table></div>`;
 }
 
-function renderCycleInspect(data) {
+function formatPromptSectionBody(v) {
+  if (v == null) return "";
+  if (typeof v === "string") return v;
+  if (typeof v === "object") {
+    const meta = [];
+    if (v.chars != null) meta.push(`${v.chars} chars`);
+    const prev = v.preview != null ? String(v.preview) : "";
+    const full = v.full != null ? String(v.full) : "";
+    const head = meta.length ? `# ${meta.join(", ")}\n\n` : "";
+    if (full && full.trim() !== prev.trim()) return `${head}${prev}\n\n—— full ——\n\n${full}`;
+    return head + prev;
+  }
+  return JSON.stringify(v, null, 2);
+}
+
+function renderInspect(data) {
   const root = document.getElementById("sv-inspect");
   const log = data.cycle_log;
-  const decisions = data.decisions || [];
-  const strip = data.strip_full_prompts;
+  const strip = !!data.strip_full_prompts;
 
-  const decRows = decisions
-    .map((d) => {
-      const mj =
-        d.model_json != null
-          ? `<details><summary>model_json</summary><pre class="sv-pre">${escapeHtml(JSON.stringify(d.model_json, null, 2))}</pre></details>`
-          : "";
-      return `<tr>
-        <td><code>${escapeHtml(d.kind)}</code></td>
-        <td>${escapeHtml(d.symbol || "—")}</td>
-        <td>${escapeHtml(d.side || "—")}</td>
-        <td>${d.executed ? "yes" : "no"}</td>
-        <td style="max-width:14rem;font-size:0.8rem">${escapeHtml((d.reason_he || "").slice(0, 280))}</td>
-        <td>${mj}</td>
-      </tr>`;
-    })
-    .join("");
-
-  let logBlock = "";
-  if (!log) {
-    logBlock = `<p class="muted">No JSON cycle log on disk for cycle <strong>#${data.cycle_id}</strong> (logging disabled, different log directory, or file not written yet).</p>`;
-  } else {
-    const prompt = log.prompt || {};
-    const sections = (prompt.sections && typeof prompt.sections === "object" ? prompt.sections : {}) || {};
-    const secHtml = Object.keys(sections)
-      .map((name) => {
-        const body = formatPromptSectionBody(sections[name]);
-        return `<details><summary><code>${escapeHtml(name)}</code></summary><pre class="sv-pre">${escapeHtml(body)}</pre></details>`;
-      })
-      .join("");
-
-    logBlock = `
-      <p><span class="sv-pill">log file</span><code>${escapeHtml(log._log_filename || "")}</code></p>
-      <p><span class="sv-pill">strip full prompts</span>${strip ? "yes (API removed full text fields if present)" : "no"}</p>
-      <h3>Ingest snapshot</h3>
-      <pre class="sv-pre">${escapeHtml(JSON.stringify(log.ingest || {}, null, 2))}</pre>
-      <h3>Model response (parsed JSON from Ollama)</h3>
-      <pre class="sv-pre">${escapeHtml(JSON.stringify(log.model_response ?? log.model_error ?? {}, null, 2))}</pre>
-      ${
-        log.model_error
-          ? `<h3>Error</h3><pre class="sv-pre" style="border:1px solid #633">${escapeHtml(String(log.model_error))}</pre>`
-          : ""
-      }
-      <h3>Executions audit (pending list)</h3>
-      <pre class="sv-pre">${escapeHtml(JSON.stringify(log.executions || [], null, 2))}</pre>
-      <h3>Performance / portfolio snapshots</h3>
-      <pre class="sv-pre">${escapeHtml(
-        JSON.stringify(
-          {
-            performance_before: log.performance_before,
-            performance_after: log.performance_after,
-            portfolio_after: log.portfolio_after,
-          },
-          null,
-          2
-        )
-      )}</pre>
-      <h3>Prompt sections</h3>
-      <p class="muted">Main trader call uses <code>system</code> + <code>user</code> (Hebrew block). Other keys are copies logged for supervision.</p>
-      ${secHtml || "<p class='muted'>No prompt sections in file.</p>"}
-    `;
+  let decHtml = "";
+  for (const d of data.decisions || []) {
+    const mj =
+      d.model_json != null
+        ? `<details><summary><code>model_json</code></summary><pre class="rationale-pre">${escapeHtml(
+            JSON.stringify(d.model_json, null, 2)
+          )}</pre></details>`
+        : "";
+    decHtml += `<tr><td>${escapeHtml(String(d.kind))}</td><td>${escapeHtml(d.company_label || d.symbol || "—")}</td>
+      <td>${escapeHtml(String(d.side || "—"))}</td><td>${d.executed ? "yes" : "no"}</td>
+      <td><pre class="rationale-pre tight">${escapeHtml((d.reason_he || "").slice(0, 4000))}</pre>${mj}</td></tr>`;
   }
 
+  if (!log) {
+    root.innerHTML = `
+      <p class="muted">No cycle JSON on disk for <strong>#${data.cycle_id}</strong>.
+      Trader may have logging disabled (<code>DEMO_TRADER_CYCLE_LOG_ENABLED=0</code>) or a different <code>DEMO_TRADER_CYCLE_LOG_DIR</code>.</p>
+      <h3>SQLite decisions</h3><div class="sv-scroll sv-table-wrap"><table><thead><tr><th>kind</th><th>Issuer</th><th>side</th><th>exec</th><th>payload</th></tr></thead>
+      <tbody>${decHtml || `<tr><td colspan="5" class="muted">No rows.</td></tr>`}</tbody></table></div>`;
+    return;
+  }
+
+  const sections = ((log.prompt && log.prompt.sections) || {});
+  let secBlocks = "";
+  for (const [name, val] of Object.entries(sections)) {
+    secBlocks += `<details><summary><code>${escapeHtml(name)}</code></summary><pre class="rationale-pre">${escapeHtml(
+      formatPromptSectionBody(val)
+    )}</pre></details>`;
+  }
+
+  const err = log.model_error ? `<h3>Error</h3><pre class="rationale-pre">${escapeHtml(String(log.model_error))}</pre>` : "";
+
   root.innerHTML = `
-    <h3>SQLite <code>decisions</code> for this cycle</h3>
-    <div class="sv-scroll">
-      <table class="sv-table"><thead><tr><th>kind</th><th>symbol</th><th>side</th><th>exec</th><th>reason (trim)</th><th>json</th></tr></thead>
-      <tbody>${decRows || "<tr><td colspan='6' class='muted'>No rows (cycle id not in DB yet).</td></tr>"}</tbody></table>
-    </div>
-    ${logBlock}
-  `;
+    <p><code>${escapeHtml(log._log_filename || "")}</code> · strip-full via API = <strong>${strip ? "yes" : "no"}</strong></p>
+    <h3>Ingest</h3><pre class="rationale-pre">${escapeHtml(JSON.stringify(log.ingest || {}, null, 2))}</pre>
+    <h3>Model response JSON</h3><pre class="rationale-pre">${escapeHtml(JSON.stringify(log.model_response ?? {}, null, 2))}</pre>
+    ${err}
+    <h3>Recorded executions stub</h3><pre class="rationale-pre">${escapeHtml(JSON.stringify(log.executions || [], null, 2))}</pre>
+    <h3>Prompt blocks</h3>
+    ${secBlocks || "<p class='muted'>No prompt sections parsed.</p>"}
+    <h3>SQLite decisions sync</h3>
+    <div class="sv-scroll sv-table-wrap"><table><thead><tr><th>kind</th><th>Name</th><th>side</th><th>exec</th><th>payload</th></tr></thead>
+      <tbody>${decHtml}</tbody></table></div>`;
 }
 
-async function runCycleInspect() {
+async function runInspect() {
   const sel = document.getElementById("sv-cycle-select");
   const id = parseInt(sel.value, 10);
   if (!id) {
-    setSvStatus("Pick a cycle id first.", true);
+    setSvStatus("Pick a cycle first.", true);
     return;
   }
   const strip = document.getElementById("sv-strip-full").checked;
-  setSvStatus("Loading cycle inspect…");
+  const q = `/api/supervision/cycle-inspect?cycle_id=${id}&strip_full_prompts=${strip ? "1" : "0"}`;
+  setSvStatus("Loading inspector…");
   try {
-    const q = `cycle_id=${id}&strip_full_prompts=${strip ? "1" : "0"}`;
-    const data = await fetchJson(`/api/supervision/cycle-inspect?${q}`);
-    renderCycleInspect(data);
+    const data = await fetchJson(q);
+    renderInspect(data);
     setSvStatus(`Loaded inspect for #${id}`);
   } catch (e) {
     setSvStatus(String(e), true);
   }
 }
 
-async function loadSupervisionPage() {
+async function loadSupervision(force = false) {
+  const overviewEl = document.getElementById("sv-overview");
+  if (!overviewEl) return;
+  if (!force && overviewEl.innerHTML.trim() !== "") {
+    /* keep cache until explicit reload — still allow table updates */
+  }
+  setSvBanner("", false);
   setSvStatus("Loading overview…");
   try {
-    const ov = await fetchJson("/api/supervision/overview?cycle_log_limit=100");
+    const ov = await fetchJson("/api/supervision/overview?cycle_log_limit=120");
     renderSupervisionOverview(ov);
     renderLogTable(ov.cycle_logs);
     fillCycleSelect(ov.cycle_logs);
-    setSvStatus(`Overview loaded (${new Date().toLocaleTimeString()})`);
+    setSvStatus(`Supervision refreshed ${new Date().toLocaleTimeString()}`);
   } catch (e) {
-    setSvStatus(String(e), true);
+    setSvBanner(`Supervision failed: ${e}`, true);
+    overviewEl.innerHTML = `<p class="muted">Fix the errors above — often the Flask server’s working directory misses <code>data/trader.db</code>.</p>`;
+    setSvStatus("", true);
   }
 }
 
-async function refresh() {
+async function refreshMainData() {
   setStatus("Loading…");
   const days = daysParam();
   try {
-    const [health, portfolio, cycles, knowledge] = await Promise.all([
+    const promises = [
       fetchJson("/api/health"),
       fetchJson("/api/portfolio"),
       fetchJson(`/api/cycles?days=${days}`),
       fetchJson(`/api/knowledge?days=${days}${document.getElementById("maya-only").checked ? "&maya_only=1" : ""}`),
-    ]);
-    if (!health.ok) setStatus("Missing data/trader.db or paper_state.json", true);
-    else setStatus(`Updated ${new Date().toLocaleTimeString()}`);
+    ];
+    if (activeTabId() === "supervision") {
+      promises.push(fetchJson("/api/supervision/overview?cycle_log_limit=120"));
+    }
+    const bundle = await Promise.all(promises);
+    let i = 0;
+    const health = bundle[i++];
+    const portfolio = bundle[i++];
+    const cycles = bundle[i++];
+    const knowledge = bundle[i++];
+    if (!health.ok) setStatus("Missing trader.db and/or paper_state.json at configured paths.", true);
+    else setStatus(`Dashboard data ${new Date().toLocaleTimeString()}`);
     renderPortfolio(portfolio);
     renderCycles(cycles);
     renderKnowledge(knowledge);
-    if (activeTabId() === "supervision") await loadSupervisionPage();
+    if (activeTabId() === "supervision" && bundle[i]) {
+      setSvBanner("", false);
+      const ov = bundle[i];
+      renderSupervisionOverview(ov);
+      renderLogTable(ov.cycle_logs);
+      fillCycleSelect(ov.cycle_logs);
+    }
   } catch (e) {
     setStatus(String(e), true);
   }
@@ -392,32 +434,40 @@ async function refresh() {
 
 document.querySelectorAll(".tab").forEach((btn) => {
   btn.addEventListener("click", () => {
-    document.querySelectorAll(".tab").forEach((b) => b.classList.remove("active"));
+    document.querySelectorAll(".tab").forEach((b) => {
+      b.classList.remove("active");
+      b.setAttribute("aria-selected", "false");
+    });
     document.querySelectorAll(".panel").forEach((p) => p.classList.remove("active"));
     btn.classList.add("active");
+    btn.setAttribute("aria-selected", "true");
     document.getElementById(`tab-${btn.dataset.tab}`).classList.add("active");
-    if (btn.dataset.tab === "supervision") loadSupervisionPage();
+    setSvBanner("", false);
+    if (btn.dataset.tab === "supervision") loadSupervision(true);
   });
 });
 
-document.getElementById("refresh").addEventListener("click", refresh);
-document.getElementById("days").addEventListener("change", refresh);
-document.getElementById("maya-only").addEventListener("change", refresh);
+document.getElementById("refresh").addEventListener("click", refreshMainData);
+document.getElementById("days").addEventListener("change", refreshMainData);
+document.getElementById("maya-only").addEventListener("change", refreshMainData);
+
+const chk = document.getElementById("auto-refresh");
+if (chk) chk.addEventListener("change", restartAutoRefresh);
 
 const svReload = document.getElementById("sv-reload");
-if (svReload) svReload.addEventListener("click", () => loadSupervisionPage());
-const svBtn = document.getElementById("sv-inspect-btn");
-if (svBtn) svBtn.addEventListener("click", () => runCycleInspect());
+if (svReload) svReload.addEventListener("click", () => loadSupervision(true));
+const inspectBtn = document.getElementById("sv-inspect-btn");
+if (inspectBtn) inspectBtn.addEventListener("click", runInspect);
 
-const svLogTable = document.getElementById("sv-log-table");
-if (svLogTable) {
-  svLogTable.addEventListener("click", (e) => {
-    const btn = e.target.closest("button[data-cycle]");
-    if (!btn) return;
-    document.getElementById("sv-cycle-select").value = btn.dataset.cycle;
-    runCycleInspect();
+const logTbl = document.getElementById("sv-log-table");
+if (logTbl) {
+  logTbl.addEventListener("click", (ev) => {
+    const tgt = ev.target.closest("button[data-cycle]");
+    if (!tgt) return;
+    document.getElementById("sv-cycle-select").value = tgt.getAttribute("data-cycle");
+    runInspect();
   });
 }
 
-refresh();
-setInterval(refresh, 60_000);
+refreshMainData();
+restartAutoRefresh();

@@ -5,7 +5,6 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>TA-35 Paper Trader</title>
   <link rel="stylesheet" href="/static/style.css" />
-  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 </head>
 <body>
   <header>
@@ -20,28 +19,30 @@
           <option value="365">1 year</option>
         </select>
       </label>
-      <button id="refresh" type="button">Refresh</button>
+      <button id="refresh" type="button">Refresh now</button>
+      <label class="inline-check"><input type="checkbox" id="auto-refresh" /> Auto-refresh every 2 min</label>
       <span id="status" class="status"></span>
     </div>
   </header>
 
-  <nav class="tabs">
-    <button type="button" class="tab active" data-tab="portfolio">Portfolio &amp; cycles</button>
-    <button type="button" class="tab" data-tab="knowledge">Knowledge center</button>
-    <button type="button" class="tab" data-tab="supervision">Run supervision</button>
+  <nav class="tabs" role="tablist">
+    <button type="button" class="tab active" role="tab" aria-selected="true" data-tab="portfolio">Portfolio &amp; cycles</button>
+    <button type="button" class="tab" role="tab" aria-selected="false" data-tab="knowledge">Knowledge center</button>
+    <button type="button" class="tab" role="tab" aria-selected="false" data-tab="supervision">Run supervision</button>
   </nav>
 
-  <main id="tab-portfolio" class="panel active">
+  <main id="tab-portfolio" class="panel active" role="tabpanel">
     <section class="cards" id="summary-cards"></section>
     <div class="grid-2">
       <section>
-        <h2>Holdings vs cash</h2>
-        <canvas id="alloc-chart"></canvas>
+        <h2>Allocation vs cash</h2>
+        <p class="muted">Shares of NAV — horizontal bars (no pie).</p>
+        <div id="alloc-bars"></div>
       </section>
       <section>
         <h2>Positions</h2>
         <table id="positions-table">
-          <thead><tr><th>Symbol</th><th>Qty</th><th>Last</th><th>Value ₪</th></tr></thead>
+          <thead><tr><th>Company</th><th>Ticker</th><th>Qty</th><th>Last</th><th>Value ₪</th></tr></thead>
           <tbody></tbody>
         </table>
       </section>
@@ -52,11 +53,42 @@
     </section>
   </main>
 
-  <main id="tab-knowledge" class="panel">
+  <main id="tab-knowledge" class="panel" role="tabpanel">
     <div class="toolbar sub">
       <label><input type="checkbox" id="maya-only" /> Maya flash / reports only</label>
     </div>
     <section id="knowledge-list"></section>
+  </main>
+
+  <main id="tab-supervision" class="panel" role="tabpanel">
+    <p class="muted sv-intro">
+      Storage footprint, SQLite tables, cycle JSON files, prompts, and model output per cycle.
+      Enable <code>DEMO_TRADER_CYCLE_LOG_FULL_PROMPTS=1</code> to persist full-sized prompt blobs on disk (large files).
+    </p>
+    <div id="sv-error" class="sv-error-banner" hidden></div>
+    <div class="toolbar sub">
+      <button type="button" id="sv-reload">Reload supervision</button>
+      <span id="sv-status" class="status"></span>
+    </div>
+    <div id="sv-overview"></div>
+    <section class="sv-split">
+      <div>
+        <h2>Cycle JSON files</h2>
+        <p class="muted">Newest first. “Inspect” opens below.</p>
+        <div id="sv-log-table"></div>
+      </div>
+      <div>
+        <h2>Inspect one cycle</h2>
+        <div class="toolbar sub wrap">
+          <label>Cycle
+            <select id="sv-cycle-select"><option value="">— choose —</option></select>
+          </label>
+          <label><input type="checkbox" id="sv-strip-full" checked /> Omit <code>full</code> prompt fields in API payload</label>
+          <button type="button" id="sv-inspect-btn">Load JSON + SQLite decisions</button>
+        </div>
+        <div id="sv-inspect"></div>
+      </div>
+    </section>
   </main>
 
   <script src="/static/app.js"></script>

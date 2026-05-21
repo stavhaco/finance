@@ -95,17 +95,12 @@ def create_app(cfg: Config | None = None) -> Flask:
     def api_supervision_cycle_inspect():
         cid = request.args.get("cycle_id", type=int)
         if cid is None or cid < 1:
-            return jsonify({"error": "cycle_id is required and must be positive"}), 400
+            return jsonify({"error": "cycle_id must be positive"}), 400
         strip_full = request.args.get("strip_full_prompts", "1").lower() not in {"0", "false", "no"}
-        log = load_cycle_log_payload(config, cid, strip_full_prompts=strip_full)
+        payload = load_cycle_log_payload(config, cid, strip_full_prompts=strip_full)
         decisions = load_cycle_decisions_detail(config, cid)
         return jsonify(
-            {
-                "cycle_id": cid,
-                "cycle_log": log,
-                "decisions": decisions,
-                "strip_full_prompts": strip_full,
-            }
+            {"cycle_id": cid, "cycle_log": payload, "decisions": decisions, "strip_full_prompts": strip_full}
         )
 
     return app
@@ -116,9 +111,9 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--host", default="127.0.0.1")
     p.add_argument("--port", type=int, default=8765)
     args = p.parse_args(argv)
-    app = create_app()
+    flask_app = create_app()
     print(f"Dashboard: http://{args.host}:{args.port}/", flush=True)
-    app.run(host=args.host, port=args.port, debug=False, threaded=True)
+    flask_app.run(host=args.host, port=args.port, debug=False, threaded=True)
     return 0
 
 

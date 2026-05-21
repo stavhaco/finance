@@ -200,3 +200,79 @@ button.sv-linkish {
   padding: 0;
   font-size: inherit;
 }
+
+.inline-check input { vertical-align: middle; margin-right: 0.25rem; }
+
+.mono-sm { font-size: 0.78rem; word-break: break-all; font-family: ui-monospace, monospace; color: var(--muted); }
+.mono-xs { font-size: 0.72rem; word-break: break-all; }
+
+#alloc-bars { display: flex; flex-direction: column; gap: 0.65rem; }
+.allo-row { font-size: 0.82rem; }
+.allo-meta { display: flex; justify-content: space-between; gap: 0.5rem; align-items: baseline; margin-bottom: 0.2rem; }
+.allo-label { max-width: 70%; overflow-wrap: anywhere; }
+.allo-pct { color: var(--muted); font-size: 0.78rem; white-space: nowrap; }
+.allo-track {
+  height: 10px; border-radius: 5px; background: #0b1018; overflow: hidden; border: 1px solid var(--border);
+}
+.allo-fill { height: 100%; border-radius: 4px; min-width: 2px; transition: width 0.2s ease; }
+
+.rationale-pre {
+  margin: 0.4rem 0 0;
+  padding: 0.55rem 0.65rem;
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: #0f1520;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 0.82rem;
+  line-height: 1.4;
+}
+.rationale-pre.tight { font-size: 0.78rem; }
+
+.cycle-narr { margin: 0.4rem 0 0.6rem; cursor: pointer; }
+.cycle-narr summary { color: var(--accent); font-size: 0.85rem; }
+
+.sv-intro { margin-top: 0; max-width: 62rem; }
+.sv-error-banner {
+  background: #3a2430;
+  border: 1px solid var(--red);
+  color: #ffd6d6;
+  padding: 0.65rem 0.85rem;
+  border-radius: 8px;
+  margin-bottom: 1rem;
+  font-size: 0.88rem;
+}
+.sv-error-banner.is-error { border-color: var(--red); }
+
+.sv-split {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 1.5rem;
+  margin-top: 1.25rem;
+}
+@media (max-width: 1000px) { .sv-split { grid-template-columns: 1fr; } }
+
+.sv-scroll {
+  max-height: 26rem;
+  overflow: auto;
+}
+.sv-table-wrap table { font-size: 0.82rem; }
+.sv-dl {
+  display: grid;
+  grid-template-columns: minmax(0, auto) minmax(0, 1fr);
+  gap: 0.2rem 0.85rem;
+  font-size: 0.82rem;
+}
+.sv-dl dt { color: var(--muted); margin: 0; }
+.sv-dl dd { margin: 0 0 0.4rem; overflow-wrap: anywhere; }
+
+.toolbar.sub.wrap { flex-wrap: wrap; row-gap: 0.35rem; }
+
+.link-btn {
+  background: transparent;
+  border: none;
+  color: var(--accent);
+  cursor: pointer;
+  text-decoration: underline;
+  font-size: 0.85rem;
+}
