@@ -303,3 +303,219 @@ def parse_range_query(since_s: str | None, until_s: str | None) -> tuple[datetim
     since = _parse_ts(since_s) if since_s else None
     until = _parse_ts(until_s) if until_s else None
     return since, until
+
+
+def _cycle_id_from_log_filename(name: str) -> int:
+    """Parse `cycle_00042_....json` → 42."""
+    if not name.startswith("cycle_") or not name.endswith(".json"):
+        return 0
+    rest = name[len("cycle_") : -len(".json")]
+    idx = rest.find("_")
+    if idx <= 0:
+        return 0
+    try:
+        return int(rest[:idx])
+    except ValueError:
+        return 0
+
+
+def _file_stat(path: Path) -> dict[str, Any]:
+    if not path.is_file():
+        return {"exists": False, "bytes": 0, "modified": None}
+    st = path.stat()
+    return {
+        "exists": True,
+        "bytes": int(st.st_size),
+        "modified": datetime.fromtimestamp(st.st_mtime, tz=timezone.utc).isoformat(),
+    }
+
+
+TABLE_PURPOSES: dict[str, str] = {
+    "companies": "TA-35 catalog row per symbol; Yahoo fundamentals columns updated each cycle.",
+    "knowledge_events": "RSS + Maya headlines/snippets; optional LLM enrichment (English summary, tags).",
+    "cycles": "One row per trader loop: NAV snapshot, benchmark, headline_count, trading_allowed.",
+    "decisions": "Per-cycle audit: LLM summary, trades, skips, errors; optional model_json and MTM outcomes.",
+    "price_bars": "Intraday OHLCV from Yahoo (simulation / backfill).",
+    "app_kv": "Key-value store (e.g. last intraday backfill Israel calendar day).",
+    "schema_migrations": "Applied SQLite migration versions.",
+}
+
+
+def sqlite_table_row_counts(db_path: str) -> list[dict[str, Any]]:
+    conn = connect_readonly(db_path)
+    try:
+        cur = conn.execute(
+            """
+            SELECT name FROM sqlite_master
+            WHERE type='table' AND name NOT LIKE 'sqlite_%'
+            ORDER BY name
+            """
+        )
+        names = [str(r[0]) for r in cur.fetchall()]
+        out: list[dict[str, Any]] = []
+        for name in names:
+            try:
+                cnt = int(conn.execute(f"SELECT COUNT(*) AS c FROM {name}").fetchone()["c"])
+            except sqlite3.Error:
+                cnt = -1
+            out.append(
+                {
+                    "name": name,
+                    "rows": cnt,
+                    "purpose": TABLE_PURPOSES.get(name, "Application data."),
+                }
+            )
+        return out
+    finally:
+        conn.close()
+
+
+def load_model_runtime_snapshot(cfg: Config) -> dict[str, Any]:
+    return {
+        "ollama_base_url": cfg.ollama_base_url,
+        "ollama_model": cfg.ollama_model,
+        "ollama_timeout_sec": cfg.ollama_timeout_sec,
+        "ollama_enrichment_model": cfg.ollama_enrichment_model,
+        "ollama_translate_model": cfg.ollama_translate_model,
+        "dry_run": cfg.dry_run,
+        "simulation": cfg.simulation,
+        "sim_ingest_live": cfg.sim_ingest_live,
+        "enforce_tase_hours": cfg.enforce_tase_hours,
+        "maya_enabled": cfg.maya_enabled,
+        "cycle_log_enabled": cfg.cycle_log_enabled,
+        "cycle_log_dir": cfg.cycle_log_dir,
+        "cycle_log_full_prompts": cfg.cycle_log_full_prompts,
+        "knowledge_enrich_on_ingest": cfg.knowledge_enrich_on_ingest,
+        "knowledge_enrich_fetch_body": cfg.knowledge_enrich_fetch_body,
+        "knowledge_prompt_rows": cfg.knowledge_prompt_rows,
+        "knowledge_trader_digest_limit": cfg.knowledge_trader_digest_limit,
+        "benchmark_symbol": cfg.benchmark_symbol,
+        "watchlist_count": len(cfg.watchlist),
+    }
+
+
+def load_supervision_overview(cfg: Config, *, cycle_log_limit: int = 80) -> dict[str, Any]:
+    db_p = Path(cfg.db_path)
+    state_p = Path(cfg.state_path)
+    log_dir = Path(cfg.cycle_log_dir)
+
+    cycle_files: list[dict[str, Any]] = []
+    log_total_bytes = 0
+    log_file_count = 0
+    if log_dir.is_dir():
+        all_logs = [p for p in log_dir.glob("cycle_*.json") if p.is_file()]
+        log_file_count = len(all_logs)
+        paths = sorted(all_logs, key=lambda p: p.stat().st_mtime, reverse=True)
+        for p in paths[: max(1, int(cycle_log_limit))]:
+            st = p.stat()
+            sz = int(st.st_size)
+            log_total_bytes += sz
+            cycle_files.append(
+                {
+                    "cycle_id": _cycle_id_from_log_filename(p.name),
+                    "filename": p.name,
+                    "bytes": sz,
+                    "modified": datetime.fromtimestamp(st.st_mtime, tz=timezone.utc).isoformat(),
+                }
+            )
+
+    tables: list[dict[str, Any]] = []
+    if db_p.is_file():
+        try:
+            tables = sqlite_table_row_counts(str(db_p))
+        except Exception as e:
+            tables = [{"name": "(error)", "rows": -1, "purpose": str(e)}]
+
+    data_flow = [
+        "Each cycle can append rows to knowledge_events (RSS/Maya) and refresh companies fundamentals.",
+        "cycles + decisions record the loop outcome; paper portfolio lives in paper_state.json.",
+        "When cycle logging is enabled, a JSON file under cycle_log_dir stores ingest counts, prompts, and model_response.",
+    ]
+
+    return {
+        "paths": {
+            "db_path": str(db_p),
+            "state_path": str(state_p),
+            "cycle_log_dir": str(log_dir),
+            "db": _file_stat(db_p),
+            "state": _file_stat(state_p),
+            "cycle_log_dir_exists": log_dir.is_dir(),
+            "cycle_log_file_count": log_file_count,
+            "cycle_log_listed_bytes_sum": log_total_bytes,
+        },
+        "sqlite_tables": tables,
+        "cycle_logs": cycle_files,
+        "data_flow": data_flow,
+        "model_runtime": load_model_runtime_snapshot(cfg),
+    }
+
+
+def _strip_prompt_full_sections(payload: dict[str, Any]) -> dict[str, Any]:
+    """Return a copy without prompt.section[*].full to keep API payloads smaller."""
+    out = json.loads(json.dumps(payload, ensure_ascii=False))
+    prompt = out.get("prompt")
+    if not isinstance(prompt, dict):
+        return out
+    sections = prompt.get("sections")
+    if not isinstance(sections, dict):
+        return out
+    for key in list(sections.keys()):
+        v = sections[key]
+        if isinstance(v, dict) and "full" in v:
+            sections[key] = {k: val for k, val in v.items() if k != "full"}
+    return out
+
+
+def load_cycle_log_payload(cfg: Config, cycle_id: int, *, strip_full_prompts: bool) -> dict[str, Any] | None:
+    log_dir = Path(cfg.cycle_log_dir)
+    if not log_dir.is_dir():
+        return None
+    matches = sorted(log_dir.glob(f"cycle_{int(cycle_id):05d}_*.json"), reverse=True)
+    path = matches[0] if matches else None
+    if path is None or not path.is_file():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    payload["_log_filename"] = path.name
+    if strip_full_prompts:
+        payload = _strip_prompt_full_sections(payload)
+    return payload
+
+
+def _parse_model_json_cell(raw: Any) -> Any:
+    if raw is None:
+        return None
+    if isinstance(raw, (dict, list)):
+        return raw
+    if isinstance(raw, str) and raw.strip():
+        try:
+            return json.loads(raw)
+        except json.JSONDecodeError:
+            return raw
+    return raw
+
+
+def load_cycle_decisions_detail(cfg: Config, cycle_id: int) -> list[dict[str, Any]]:
+    conn = connect_readonly(cfg.db_path)
+    try:
+        cur = conn.execute(
+            """
+            SELECT id, ts, kind, symbol, side, qty, executed, exec_price, notional_ils,
+                   reason_he, analysis_he, model_json, broker_message,
+                   outcome_mtm_ils, outcome_ts
+            FROM decisions
+            WHERE cycle_id=?
+            ORDER BY id ASC
+            """,
+            (int(cycle_id),),
+        )
+        rows = []
+        for r in cur.fetchall():
+            d = dict(r)
+            d["model_json"] = _parse_model_json_cell(d.get("model_json"))
+            rows.append(d)
+        return rows
+    finally:
+        conn.close()

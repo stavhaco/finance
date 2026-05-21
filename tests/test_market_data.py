@@ -1,6 +1,6 @@
 import unittest
 
-from demo_trader.market_data import _price_ils
+from demo_trader.market_data import _price_ils, price_to_ils
 
 
 class TestMarketData(unittest.TestCase):

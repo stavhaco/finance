@@ -205,6 +205,7 @@ pip install -r requirements.txt
 
 - **Tab 1:** NAV, cash %, holdings chart, cycle timeline (market open/closed, buy/sell/blocked + reasons, vs TA-35).
 - **Tab 2:** Knowledge center (executive summaries; optional Maya-only filter).
+- **Tab 3 — Run supervision:** Where data lives (DB, `paper_state.json`, cycle JSON logs), SQLite table row counts, per-cycle JSON log + `decisions` rows, ingest snapshot, full prompt sections (from log files; optional strip of large `full` fields), and parsed `model_response`.
 - Timeframe: 1d / 7d / 30d / 90d / 1y (auto-refresh every 60s).
 
 Uses SQLite **WAL + read-only** connections so the dashboard does not lock the trading loop.

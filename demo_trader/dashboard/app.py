@@ -7,7 +7,15 @@ from pathlib import Path
 from flask import Flask, jsonify, request, send_from_directory
 
 from demo_trader.config import Config
-from demo_trader.dashboard.data import load_cycles, load_knowledge, load_portfolio, parse_range_query
+from demo_trader.dashboard.data import (
+    load_cycle_decisions_detail,
+    load_cycle_log_payload,
+    load_cycles,
+    load_knowledge,
+    load_portfolio,
+    load_supervision_overview,
+    parse_range_query,
+)
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 
@@ -75,6 +83,28 @@ def create_app(cfg: Config | None = None) -> Flask:
                 "since": since.isoformat() if since else None,
                 "until": until.isoformat() if until else None,
                 "items": rows,
+            }
+        )
+
+    @app.get("/api/supervision/overview")
+    def api_supervision_overview():
+        limit = int(request.args.get("cycle_log_limit", "100"))
+        return jsonify(load_supervision_overview(config, cycle_log_limit=limit))
+
+    @app.get("/api/supervision/cycle-inspect")
+    def api_supervision_cycle_inspect():
+        cid = request.args.get("cycle_id", type=int)
+        if cid is None or cid < 1:
+            return jsonify({"error": "cycle_id is required and must be positive"}), 400
+        strip_full = request.args.get("strip_full_prompts", "1").lower() not in {"0", "false", "no"}
+        log = load_cycle_log_payload(config, cid, strip_full_prompts=strip_full)
+        decisions = load_cycle_decisions_detail(config, cid)
+        return jsonify(
+            {
+                "cycle_id": cid,
+                "cycle_log": log,
+                "decisions": decisions,
+                "strip_full_prompts": strip_full,
             }
         )
 
