@@ -12,13 +12,13 @@ if command -v lsof >/dev/null 2>&1; then
   lsof -nP -iTCP:"${PORT}" -sTCP:LISTEN 2>/dev/null || echo "  (nothing listening on ${PORT})"
   echo ""
   if lsof -nP -iTCP:"${PORT}" -sTCP:LISTEN 2>/dev/null | grep -q "127.0.0.1:${PORT}"; then
-    if ! lsof -nP -iTCP:"${PORT}" -sTCP:LISTEN 2>/dev/null | grep -qE '\*:'"${PORT}"'|0\.0\.0\.0:'"${PORT}"; then
+    if ! lsof -nP -iTCP:"${PORT}" -sTCP:LISTEN 2>/dev/null | grep -qE "\\*:${PORT}|0\\.0\\.0\\.0:${PORT}"; then
       echo "PROBLEM: Ollama is bound to 127.0.0.1 only — cloud/LAN cannot connect."
       echo "  Fix: ./scripts/mac/restart_ollama_lan.sh"
       echo "  Or:  export OLLAMA_HOST=0.0.0.0:11434 && killall ollama && open -a Ollama"
     fi
   fi
-  if lsof -nP -iTCP:"${PORT}" -sTCP:LISTEN 2>/dev/null | grep -qE '\*:'"${PORT}"'|0\.0\.0\.0:'"${PORT}"; then
+  if lsof -nP -iTCP:"${PORT}" -sTCP:LISTEN 2>/dev/null | grep -qE "\\*:${PORT}|0\\.0\\.0\\.0:${PORT}"; then
     echo "OK: Ollama appears to listen on all interfaces (LAN bridge possible)."
   fi
 else

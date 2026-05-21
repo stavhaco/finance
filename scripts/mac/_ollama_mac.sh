@@ -41,7 +41,7 @@ ollama_mac_stop() {
 ollama_mac_listens_lan() {
   local port="${1:-11434}"
   command -v lsof >/dev/null 2>&1 || return 1
-  lsof -nP -iTCP:"${port}" -sTCP:LISTEN 2>/dev/null | grep -qE '\*:'"${port}"'|0\.0\.0\.0:'"${port}"'
+  lsof -nP -iTCP:"${port}" -sTCP:LISTEN 2>/dev/null | grep -qE "\\*:${port}|0\\.0\\.0\\.0:${port}"
 }
 
 ollama_mac_api_ok() {
@@ -72,10 +72,22 @@ ollama_mac_start_lan() {
 
   cli="$(ollama_mac_find_cli)"
   if [[ -n "$cli" ]]; then
+    if ollama_mac_listens_lan 11434 && ollama_mac_api_ok "http://127.0.0.1:11434"; then
+      echo "Ollama already listening on *:11434 (LAN bridge OK) — not starting a second serve."
+      return 0
+    fi
     echo "No Ollama.app bundle found; starting CLI: $cli serve"
     echo "OLLAMA_HOST=${OLLAMA_HOST}"
     log="${OLLAMA_SERVE_LOG:-/tmp/ollama-serve.log}"
-    nohup env OLLAMA_HOST="$OLLAMA_HOST" "$cli" serve >>"$log" 2>&1 &
+    if ! nohup env OLLAMA_HOST="$OLLAMA_HOST" "$cli" serve >>"$log" 2>&1 & then
+      echo "WARN: ollama serve returned error (often port already in use). Log: $log"
+      tail -5 "$log" 2>/dev/null || true
+      if ollama_mac_api_ok "http://127.0.0.1:11434"; then
+        echo "API is up anyway — check: lsof -nP -iTCP:11434 -sTCP:LISTEN"
+        return 0
+      fi
+      return 1
+    fi
     echo "Log: $log"
     return 0
   fi
