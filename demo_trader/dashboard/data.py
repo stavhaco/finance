@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -100,6 +101,96 @@ def merge_action_reason(
         if hint and hint not in (reason_he or ""):
             chunks.append(f"היערכות והנמקה מהמודל לפי {symbol}: {hint}")
     return "\n\n".join(c for c in chunks if c)
+
+
+
+
+_HE = "\u0590-\u05FF"
+_SPACE_BETWEEN_HE = re.compile(rf"(?<=[{_HE}])\s+(?=[{_HE}])")
+
+
+def _tighten_spaced_hebrew(text: str) -> str:
+    """Remove stray spaces between Hebrew letters (LLM artifacts)."""
+    s = text or ""
+    prev = None
+    while prev != s:
+        prev = s
+        s = _SPACE_BETWEEN_HE.sub("", s)
+    return s.strip()
+
+
+def _flatten_logged_prompt_section(section: Any) -> str:
+    if section is None:
+        return ""
+    if isinstance(section, str):
+        return section.strip()
+    if isinstance(section, dict):
+        full = section.get("full")
+        if isinstance(full, str) and full.strip():
+            return full.strip()
+        preview = section.get("preview")
+        if isinstance(preview, str) and preview.strip():
+            return preview.strip()
+    return str(section).strip()
+
+
+def _english_digest_from_cycle_payload(payload: dict[str, Any]) -> str:
+    prompt = payload.get("prompt") or {}
+    sections = prompt.get("sections") or {}
+    if not isinstance(prompt, dict) or not isinstance(sections, dict):
+        return ""
+    return _flatten_logged_prompt_section(sections.get("knowledge_en")).strip()[:8000]
+
+
+def _avg_buy_ils_from_trades(trades: list[dict[str, Any]]) -> dict[str, float]:
+    """Average cost per remaining share after replaying buys/sells in trade log order."""
+    rows = sorted((t for t in trades if isinstance(t, dict)), key=lambda t: str(t.get("ts") or ""))
+    qty: dict[str, float] = {}
+    cost_basis: dict[str, float] = {}
+    for t in rows:
+        sym = str(t.get("symbol") or "").strip()
+        if not sym:
+            continue
+        side = str(t.get("side") or "").lower()
+        try:
+            q = float(t.get("qty") or 0.0)
+            px = float(t.get("price") or 0.0)
+        except (TypeError, ValueError):
+            continue
+        if q <= 0 or px <= 0:
+            continue
+        prev_q = float(qty.get(sym, 0.0))
+        prev_cb = float(cost_basis.get(sym, 0.0))
+        if side == "buy":
+            qty[sym] = prev_q + q
+            cost_basis[sym] = prev_cb + q * px
+        elif side == "sell":
+            if prev_q <= 0:
+                continue
+            sold = min(q, prev_q)
+            avg_px = prev_cb / prev_q
+            qty[sym] = prev_q - sold
+            cost_basis[sym] = prev_cb - sold * avg_px
+            if qty[sym] <= 1e-12:
+                qty.pop(sym, None)
+                cost_basis.pop(sym, None)
+    out: dict[str, float] = {}
+    for sym, qv in qty.items():
+        if qv <= 1e-12:
+            continue
+        cb = float(cost_basis.get(sym, 0.0))
+        if cb > 0:
+            out[sym] = cb / qv
+    return out
+
+
+def _round2_maybe(val: float | None) -> float | None:
+    if val is None:
+        return None
+    try:
+        return round(float(val), 2)
+    except (TypeError, ValueError):
+        return None
 
 
 def _cycle_id_from_log_filename(name: str) -> int:
@@ -314,7 +405,7 @@ def load_portfolio(cfg: Config) -> dict[str, Any]:
     state_path = Path(cfg.state_path)
     state = load_state(state_path, cfg.starting_cash_ils)
     positions: list[dict[str, Any]] = []
-    for sym, qty in sorted(state.positions.items()):
+    for sym, qty in state.positions.items():
         positions.append({"symbol": sym, "qty": float(qty), "last_price": None, "market_value_ils": 0.0})
     cash = float(state.cash_ils)
 
@@ -328,31 +419,72 @@ def load_portfolio(cfg: Config) -> dict[str, Any]:
     except Exception:
         prices = {}
 
-    if not prices and syms:
-        try:
-            conn_px = connect_readonly(cfg.db_path)
+    if syms:
+        missing_px = [
+            sym
+            for sym in syms
+            if sym not in prices
+            or prices.get(sym) is None
+            or float(prices.get(sym, 0) or 0) <= 0
+        ]
+        if missing_px:
             try:
-                for pos in positions:
-                    cur_px = conn_px.execute(
-                        "SELECT last_price, currency FROM companies WHERE symbol=?",
-                        (pos["symbol"],),
-                    )
-                    row = cur_px.fetchone()
-                    if row and row["last_price"]:
-                        px_raw = price_to_ils(float(row["last_price"]), row["currency"])
-                        if px_raw > 500 and pos["symbol"].endswith(".TA"):
-                            px_raw = px_raw / 100.0
-                        prices[pos["symbol"]] = px_raw
-            finally:
-                conn_px.close()
-        except Exception:
-            pass
+                conn_px = connect_readonly(cfg.db_path)
+                try:
+                    for sym in missing_px:
+                        cur_px = conn_px.execute(
+                            "SELECT last_price, currency FROM companies WHERE symbol=?",
+                            (sym,),
+                        )
+                        row = cur_px.fetchone()
+                        if row and row["last_price"]:
+                            px_raw = price_to_ils(float(row["last_price"]), row["currency"])
+                            if px_raw > 500 and sym.endswith(".TA"):
+                                px_raw = px_raw / 100.0
+                            prices[sym] = px_raw
+                finally:
+                    conn_px.close()
+            except Exception:
+                pass
 
-    for pos in positions:
-        sym = pos["symbol"]
-        if sym in prices:
-            pos["last_price"] = prices[sym]
-            pos["market_value_ils"] = prices[sym] * pos["qty"]
+    avg_buy_map = _avg_buy_ils_from_trades(list(state.trades))
+
+    cmap: dict[str, dict[str, str]] = {}
+    try:
+        nm_conn = connect_readonly(cfg.db_path)
+        try:
+            cmap = _company_map(nm_conn)
+            for pos in positions:
+                sym = pos["symbol"]
+                pos["company_label"] = company_display_label(sym, cmap) or sym
+                lp = prices.get(sym)
+                if lp is not None and float(lp) > 0:
+                    pos["last_price"] = round(float(lp), 2)
+                    pos["market_value_ils"] = round(float(lp) * float(pos["qty"]), 2)
+                ab = avg_buy_map.get(sym)
+                pos["avg_buy_ils"] = round(float(ab), 2) if ab is not None else None
+                up = None
+                if ab is not None and lp is not None and float(ab) > 0:
+                    up = round((float(lp) - float(ab)) / float(ab) * 100.0, 2)
+                pos["unrealized_pnl_pct"] = up
+        finally:
+            nm_conn.close()
+    except Exception:
+        for pos in positions:
+            sym = pos["symbol"]
+            pos["company_label"] = sym
+            lp = prices.get(sym)
+            if lp is not None and float(lp) > 0:
+                pos["last_price"] = round(float(lp), 2)
+                pos["market_value_ils"] = round(float(lp) * float(pos["qty"]), 2)
+            ab = avg_buy_map.get(sym)
+            pos["avg_buy_ils"] = round(float(ab), 2) if ab is not None else None
+            up = None
+            if ab is not None and lp is not None and float(ab) > 0:
+                up = round((float(lp) - float(ab)) / float(ab) * 100.0, 2)
+            pos["unrealized_pnl_pct"] = up
+
+    positions.sort(key=lambda x: float(x["market_value_ils"] or 0), reverse=True)
 
     mv_total = sum(float(p["market_value_ils"] or 0) for p in positions)
     nav = cash + mv_total
@@ -365,55 +497,45 @@ def load_portfolio(cfg: Config) -> dict[str, Any]:
         benchmark_last=float(bench_last or (state.session.benchmark_start_px if state.session else 0) or 0),
     )
 
-    cmap: dict[str, dict[str, str]] = {}
-    try:
-        nm_conn = connect_readonly(cfg.db_path)
-        try:
-            cmap = _company_map(nm_conn)
-            for pos in positions:
-                pos["company_label"] = company_display_label(pos["symbol"], cmap) or pos["symbol"]
-        finally:
-            nm_conn.close()
-    except Exception:
-        for pos in positions:
-            pos["company_label"] = pos["symbol"]
-
-    allocation: list[dict[str, Any]] = [
-        {"kind": "cash", "symbol": None, "label": "מזומן (Cash)", "value_ils": cash}
-    ]
+    holdings_alloc: list[dict[str, Any]] = []
     for pos in positions:
         v = float(pos["market_value_ils"] or 0)
         if v <= 0:
             continue
-        allocation.append(
+        holdings_alloc.append(
             {
                 "kind": "position",
                 "symbol": pos["symbol"],
                 "label": pos.get("company_label") or pos["symbol"],
-                "value_ils": v,
+                "value_ils": round(v, 2),
+                "uplift_pct": pos.get("unrealized_pnl_pct"),
             }
         )
 
+    allocation: list[dict[str, Any]] = [
+        {"kind": "cash", "symbol": None, "label": "מזומן (Cash)", "value_ils": round(cash, 2), "uplift_pct": None}
+    ]
+    allocation.extend(holdings_alloc)
+
     session = state.session
     return {
-        "cash_ils": cash,
-        "nav_ils": nav,
+        "cash_ils": round(cash, 2),
+        "nav_ils": round(nav, 2),
         "cash_pct": round(cash_pct, 2),
-        "portfolio_return_pct": perf.portfolio_return_pct,
-        "benchmark_return_pct": perf.benchmark_return_pct,
-        "alpha_pct": perf.alpha_vs_benchmark_pct,
-        "positions": positions,
+        "portfolio_return_pct": _round2_maybe(perf.portfolio_return_pct),
+        "benchmark_return_pct": _round2_maybe(perf.benchmark_return_pct),
+        "alpha_pct": _round2_maybe(perf.alpha_vs_benchmark_pct),
+        "positions": [{**p, "qty": round(float(p["qty"]), 2)} for p in positions],
         "last_cycle_ts": state.last_cycle_ts,
         "session": {
             "started_ts": session.started_ts if session else None,
             "benchmark_symbol": bench_sym,
             "benchmark_label": company_display_label(bench_sym, cmap),
-            "benchmark_start_px": session.benchmark_start_px if session else None,
-            "initial_nav_ils": session.initial_nav_ils if session else cfg.starting_cash_ils,
+            "benchmark_start_px": _round2_maybe(session.benchmark_start_px) if session else None,
+            "initial_nav_ils": round(float(session.initial_nav_ils if session else cfg.starting_cash_ils), 2),
         },
         "allocation": allocation,
     }
-
 
 def load_cycles(
     cfg: Config,
@@ -467,12 +589,16 @@ def load_cycles(
             log_path = _cycle_log_path(log_dir, cid, c["ts"])
             model_analysis = ""
             by_sym_hints: dict[str, str] = {}
+            english_digest = ""
+            payload_for_digest: dict[str, Any] = {}
             if log_path and log_path.is_file():
                 try:
-                    payload = json.loads(log_path.read_text(encoding="utf-8"))
-                    model_analysis, by_sym_hints = _model_decision_hints(payload.get("model_response"))
+                    payload_for_digest = json.loads(log_path.read_text(encoding="utf-8"))
+                    model_analysis, by_sym_hints = _model_decision_hints(payload_for_digest.get("model_response"))
+                    if isinstance(payload_for_digest, dict):
+                        english_digest = _english_digest_from_cycle_payload(payload_for_digest)
                 except Exception:
-                    pass
+                    payload_for_digest = {}
 
             sa = model_analysis.strip()
             sb = summary_from_db.strip()
@@ -486,13 +612,15 @@ def load_cycles(
             else:
                 summary_he_full = sa or sb
 
+            summary_he_full = _tighten_spaced_hebrew(summary_he_full)
+
             ref = _parse_ts(c["ts"])
             market_open = bool(c["trading_allowed"]) if ref is None else is_tase_regular_trading_hours(ref)
 
             actions = []
             for t in trades:
                 sym_t = str(t.get("symbol") or "") or None
-                reason_he = merge_action_reason(str(t.get("reason_he") or ""), symbol=sym_t, by_sym_hints=by_sym_hints)
+                reason_he = _tighten_spaced_hebrew(merge_action_reason(str(t.get("reason_he") or ""), symbol=sym_t, by_sym_hints=by_sym_hints))
                 actions.append(
                     {
                         "type": "trade",
@@ -506,7 +634,7 @@ def load_cycles(
                 )
             for b in blocked[:12]:
                 sym_b = str(b.get("symbol") or "") or None
-                reason_b = merge_action_reason(str(b.get("reason_he") or ""), symbol=sym_b, by_sym_hints=by_sym_hints)
+                reason_b = _tighten_spaced_hebrew(merge_action_reason(str(b.get("reason_he") or ""), symbol=sym_b, by_sym_hints=by_sym_hints))
                 actions.append(
                     {
                         "type": "blocked" if b.get("kind") == "blocked_after_hours" else "skip",
@@ -521,22 +649,25 @@ def load_cycles(
             if not actions and summary_he_full:
                 actions.append({"type": "hold", "symbol": None, "company_label": None, "reason_he": summary_he_full})
 
+            nav_raw = c["nav_ils"]
+            bm_px = c["benchmark_px"]
             out.append(
                 {
                     "cycle_id": cid,
                     "ts": c["ts"],
                     "market_open": market_open,
                     "trading_allowed": bool(c["trading_allowed"]),
-                    "nav_ils": c["nav_ils"],
-                    "portfolio_return_pct": c["portfolio_return_pct"],
-                    "benchmark_return_pct": c["benchmark_return_pct"],
-                    "alpha_pct": c["alpha_pct"],
-                    "benchmark_px": c["benchmark_px"],
+                    "nav_ils": round(float(nav_raw), 2) if nav_raw is not None else None,
+                    "portfolio_return_pct": _round2_maybe(c["portfolio_return_pct"]),
+                    "benchmark_return_pct": _round2_maybe(c["benchmark_return_pct"]),
+                    "alpha_pct": _round2_maybe(c["alpha_pct"]),
+                    "benchmark_px": round(float(bm_px), 2) if bm_px is not None else None,
                     "benchmark_symbol": str(c["benchmark_symbol"] or ""),
                     "benchmark_label": company_display_label(str(c["benchmark_symbol"] or ""), cmap),
                     "headline_count": c["headline_count"],
                     "executed_trades": len(trades),
                     "summary_he": summary_he_full,
+                    "english_digest": english_digest[:4000] if english_digest else "",
                     "actions": actions,
                     "cycle_log": str(log_path) if log_path else None,
                 }

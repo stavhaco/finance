@@ -276,3 +276,32 @@ button.sv-linkish {
   text-decoration: underline;
   font-size: 0.85rem;
 }
+
+/* English / Hebrew narrative readability (portfolio cycles) */
+.digest-miss { margin: 0.25rem 0 0.55rem; }
+.digest-en summary,
+.digest-he summary,
+.cycle-narr summary {
+  cursor: pointer;
+  color: var(--accent);
+  font-size: 0.88rem;
+}
+.narr-block {
+  margin-top: 0.35rem;
+  padding: 0.55rem 0.65rem;
+  border-radius: 8px;
+  background: #131b28;
+  border: 1px solid var(--border);
+  font-size: 0.88rem;
+  line-height: 1.55;
+}
+.narr-ltr {
+  direction: ltr;
+  text-align: left;
+  unicode-bidi: plaintext;
+}
+.rationale-rtl {
+  white-space: pre-wrap;
+  unicode-bidi: plaintext;
+}
+.small { font-size: 0.8rem; }

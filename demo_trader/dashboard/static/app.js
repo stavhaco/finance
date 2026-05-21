@@ -3,14 +3,22 @@ let refreshTimerId = null;
 
 function fmtIls(n) {
   if (n == null || Number.isNaN(n)) return "—";
-  return Number(n).toLocaleString("en-IL", { maximumFractionDigits: 0 }) + " ₪";
+  return Number(n).toLocaleString("en-IL", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + " ₪";
 }
 
-function fmtPct(n) {
+function fmtPct(n, withSpan) {
+  const wrap = withSpan !== false;
   if (n == null || Number.isNaN(n)) return "—";
   const v = Number(n);
+  const txt = `${v.toFixed(2)}%`;
+  if (!wrap) return txt;
   const cls = v >= 0 ? "positive" : "negative";
-  return `<span class="${cls}">${v.toFixed(3)}%</span>`;
+  return `<span class="${cls}">${txt}</span>`;
+}
+
+function fmtNum2(n) {
+  if (n == null || Number.isNaN(Number(n))) return "—";
+  return Number(n).toFixed(2);
 }
 
 function fmtBytes(n) {
@@ -36,6 +44,10 @@ function escapeHtml(s) {
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;");
+}
+
+function nl2brEscaped(s) {
+  return escapeHtml(s).replace(/\n/g, "<br>");
 }
 
 async function fetchJson(url) {
@@ -95,11 +107,16 @@ function renderAllocationBars(nav, rows) {
     const lab = escapeHtml(row.label || row.symbol || "?");
     const v = Number(row.value_ils);
     const pctRaw = Math.max(0, (v / n) * 100);
-    const pct = Math.min(100, pctRaw).toFixed(1);
+    const pct = Math.min(100, pctRaw).toFixed(2);
     const col = BAR_COLORS[idx % BAR_COLORS.length];
+    let extra = "";
+    const up = row.uplift_pct;
+    if (up != null && !Number.isNaN(Number(up)) && row.kind !== "cash") {
+      extra = ` · vs avg buy ${escapeHtml(fmtPct(Number(up), false))}`;
+    }
     lines.push(`
       <div class="allo-row">
-        <div class="allo-meta"><span class="allo-label">${lab}</span><span class="allo-pct">${pct}% · ${fmtIls(v)}</span></div>
+        <div class="allo-meta"><span class="allo-label">${lab}</span><span class="allo-pct">${pct}% · ${fmtIls(v)}${extra}</span></div>
         <div class="allo-track"><div class="allo-fill" style="width:${pct}%;background:${col}"></div></div>
       </div>`);
   });
@@ -115,17 +132,21 @@ function renderPortfolio(p) {
   cards.innerHTML = `
     <div class="card"><div class="label">NAV</div><div class="value">${fmtIls(p.nav_ils)}</div><div class="sub">session start ${fmtIls(sess.initial_nav_ils)}</div></div>
     <div class="card"><div class="label">Return vs session</div><div class="value">${ret}</div><div class="sub">α vs TA-35 ${alpha}</div></div>
-    <div class="card"><div class="label">Cash</div><div class="value">${fmtIls(p.cash_ils)}</div><div class="sub">${p.cash_pct}% of NAV</div></div>
-    <div class="card"><div class="label">Benchmark</div><div class="value" style="font-size:1rem">${escapeHtml(String(benchLine))}</div><div class="sub">${fmtPct(p.benchmark_return_pct)} · start ${sess.benchmark_start_px ?? "—"}</div></div>
+    <div class="card"><div class="label">Cash</div><div class="value">${fmtIls(p.cash_ils)}</div><div class="sub">${fmtNum2(p.cash_pct)}% of NAV</div></div>
+    <div class="card"><div class="label">Benchmark</div><div class="value" style="font-size:1rem">${escapeHtml(String(benchLine))}</div><div class="sub">${fmtPct(p.benchmark_return_pct)} · start ${sess.benchmark_start_px != null && sess.benchmark_start_px !== "" ? fmtNum2(sess.benchmark_start_px) : "—"}</div></div>
   `;
 
   const tbody = document.querySelector("#positions-table tbody");
   tbody.innerHTML = (p.positions || [])
     .map(
       (row) =>
-        `<tr><td>${escapeHtml(row.company_label || row.symbol)}</td><td><code>${escapeHtml(row.symbol)}</code></td><td>${escapeHtml(
-          String(row.qty)
-        )}</td><td>${row.last_price ?? "—"}</td><td>${fmtIls(row.market_value_ils)}</td></tr>`
+        `<tr><td>${escapeHtml(row.company_label || row.symbol)}</td><td><code>${escapeHtml(row.symbol)}</code></td><td>${fmtNum2(
+          row.qty
+        )}</td><td>${row.avg_buy_ils != null ? fmtIls(row.avg_buy_ils) : "—"}</td><td>${
+          row.last_price != null ? fmtNum2(row.last_price) : "—"
+        }</td><td>${fmtIls(row.market_value_ils)}</td><td>${
+          row.unrealized_pnl_pct != null ? fmtPct(row.unrealized_pnl_pct) : "—"
+        }</td></tr>`
     )
     .join("");
 
@@ -146,12 +167,19 @@ function renderCycles(data) {
       const perf = `Portfolio ${fmtPct(c.portfolio_return_pct)} · TA-35 ${fmtPct(c.benchmark_return_pct)} · α ${fmtPct(c.alpha_pct)}`;
       const benchLbl = c.benchmark_label ? ` · bench: ${escapeHtml(c.benchmark_label)}` : "";
       const nar = (c.summary_he || "").trim();
+      const english = (c.english_digest || "").trim();
+      const digestBlock =
+        english.length === 0
+          ? `<p class="muted digest-miss small">No English article digest (<code>knowledge_en</code>) stored in this cycle JSON.</p>`
+          : `<details class="digest-en" open><summary>English article context (${english.length.toLocaleString()} chars)</summary><div class="narr-block narr-ltr">${nl2brEscaped(
+              english
+            )}</div></details>`;
       const narrBlock =
         nar.length === 0
           ? ""
-          : `<details class="cycle-narr"><summary>Narrative from model (${nar.length.toLocaleString()} chars)</summary><pre class="rationale-pre">${escapeHtml(
+          : `<details class="cycle-narr digest-he"><summary>Hebrew model summary — RTL (${nar.length.toLocaleString()} chars)</summary><div dir="rtl" class="rationale-rtl narr-block">${escapeHtml(
               nar
-            )}</pre></details>`;
+            )}</div></details>`;
       const actions = (c.actions || [])
         .map((a) => {
           const rl = escapeHtml((a.reason_he || "").trim());
@@ -183,6 +211,7 @@ function renderCycles(data) {
             <span class="badge">${c.executed_trades} executed trades</span>
             <span class="muted">${perf}${benchLbl}</span>
           </div>
+          ${digestBlock}
           ${narrBlock}
           ${actions || "<p class='muted'>Nothing recorded this cycle.</p>"}
         </article>`;
