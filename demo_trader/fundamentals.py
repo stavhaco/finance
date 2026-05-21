@@ -65,22 +65,34 @@ def fetch_equity_fundamentals(symbol: str) -> dict[str, Any]:
         logger.warning("fundamentals: %s: %s", symbol, e)
         return out
 
-    cur = info.get("currency") or info.get("financialCurrency")
-    if cur == "ILA":
-        cur = "ILS"
+    raw_cur = info.get("currency") or info.get("financialCurrency")
+    cur = str(raw_cur) if raw_cur else None
+    raw_px = _safe_float(info.get("currentPrice") or info.get("regularMarketPrice"))
+    from demo_trader.market_data import price_to_ils
+
+    px_ils = price_to_ils(raw_px, cur) if raw_px is not None else None
+    display_cur = "ILS" if cur in {"ILA", "ILS"} else cur
 
     out.update(
         {
-            "currency": str(cur) if cur else None,
-            "last_price": _safe_float(info.get("currentPrice") or info.get("regularMarketPrice")),
+            "currency": display_cur,
+            "last_price": px_ils,
             "market_cap": _safe_float(info.get("marketCap")),
             "enterprise_value": _safe_float(info.get("enterpriseValue")),
             "trailing_pe": _safe_float(info.get("trailingPE")),
             "forward_pe": _safe_float(info.get("forwardPE")),
             "price_to_book": _safe_float(info.get("priceToBook")),
             "beta": _safe_float(info.get("beta")),
-            "fifty_two_week_high": _safe_float(info.get("fiftyTwoWeekHigh")),
-            "fifty_two_week_low": _safe_float(info.get("fiftyTwoWeekLow")),
+            "fifty_two_week_high": (
+                price_to_ils(v, cur)
+                if (v := _safe_float(info.get("fiftyTwoWeekHigh"))) is not None
+                else None
+            ),
+            "fifty_two_week_low": (
+                price_to_ils(v, cur)
+                if (v := _safe_float(info.get("fiftyTwoWeekLow"))) is not None
+                else None
+            ),
             "avg_volume_10d": _safe_float(info.get("averageVolume10days")),
             "return_1y_pct": _return_over_bars(hist["Close"], 252) if hist is not None and not hist.empty else None,
             "return_1q_pct": _return_over_bars(hist["Close"], 63) if hist is not None and not hist.empty else None,

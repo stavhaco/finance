@@ -6,8 +6,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from demo_trader.benchmark import compute_performance
 from demo_trader.config import Config
 from demo_trader.db import connect_readonly
+from demo_trader.market_data import fetch_last_prices, price_to_ils, prices_map
 from demo_trader.state_store import load_state
 from demo_trader.tase_calendar import is_tase_regular_trading_hours
 
@@ -53,38 +55,66 @@ def load_portfolio(cfg: Config) -> dict[str, Any]:
         )
     cash = float(state.cash_ils)
 
+    syms = [p["symbol"] for p in positions]
+    bench_sym = (state.session.benchmark_symbol if state.session else None) or cfg.benchmark_symbol
+    quote_syms = list(dict.fromkeys([*syms, bench_sym]))
+    prices: dict[str, float] = {}
     try:
-        conn = connect_readonly(cfg.db_path)
-        try:
-            for p in positions:
-                cur = conn.execute(
-                    "SELECT last_price FROM companies WHERE symbol=?",
-                    (p["symbol"],),
-                )
-                row = cur.fetchone()
-                if row and row["last_price"]:
-                    px = float(row["last_price"])
-                    p["last_price"] = px
-                    p["market_value_ils"] = px * p["qty"]
-        finally:
-            conn.close()
+        quotes = fetch_last_prices(quote_syms)
+        prices = prices_map(quotes)
     except Exception:
-        pass
+        prices = {}
+
+    if not prices and syms:
+        try:
+            conn = connect_readonly(cfg.db_path)
+            try:
+                for p in positions:
+                    cur = conn.execute(
+                        "SELECT last_price, currency FROM companies WHERE symbol=?",
+                        (p["symbol"],),
+                    )
+                    row = cur.fetchone()
+                    if row and row["last_price"]:
+                        px = price_to_ils(float(row["last_price"]), row["currency"])
+                        if px > 500 and p["symbol"].endswith(".TA"):
+                            px = px / 100.0
+                        prices[p["symbol"]] = px
+            finally:
+                conn.close()
+        except Exception:
+            pass
+
+    for p in positions:
+        sym = p["symbol"]
+        if sym in prices:
+            p["last_price"] = prices[sym]
+            p["market_value_ils"] = prices[sym] * p["qty"]
 
     mv_total = sum(p["market_value_ils"] for p in positions)
     nav = cash + mv_total
     cash_pct = (cash / nav * 100.0) if nav > 0 else 100.0
+
+    bench_last = prices.get(bench_sym)
+    perf = compute_performance(
+        state,
+        prices={s: prices.get(s, 0.0) for s in syms},
+        benchmark_last=float(bench_last or (state.session.benchmark_start_px if state.session else 0) or 0),
+    )
 
     session = state.session
     return {
         "cash_ils": cash,
         "nav_ils": nav,
         "cash_pct": round(cash_pct, 2),
+        "portfolio_return_pct": perf.portfolio_return_pct,
+        "benchmark_return_pct": perf.benchmark_return_pct,
+        "alpha_pct": perf.alpha_vs_benchmark_pct,
         "positions": positions,
         "last_cycle_ts": state.last_cycle_ts,
         "session": {
             "started_ts": session.started_ts if session else None,
-            "benchmark_symbol": session.benchmark_symbol if session else cfg.benchmark_symbol,
+            "benchmark_symbol": bench_sym,
             "benchmark_start_px": session.benchmark_start_px if session else None,
             "initial_nav_ils": session.initial_nav_ils if session else cfg.starting_cash_ils,
         },

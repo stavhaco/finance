@@ -13,6 +13,9 @@ class TestMarketData(unittest.TestCase):
     def test_unknown_currency_unchanged(self) -> None:
         self.assertEqual(_price_ils(100.0, "USD"), 100.0)
 
+    def test_price_to_ils_alias(self) -> None:
+        self.assertEqual(price_to_ils(9884.0, "ILA"), 98.84)
+
 
 if __name__ == "__main__":
     unittest.main()

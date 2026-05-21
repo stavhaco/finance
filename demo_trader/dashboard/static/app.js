@@ -31,11 +31,13 @@ function setStatus(msg, err = false) {
 function renderPortfolio(p) {
   const sess = p.session || {};
   const cards = document.getElementById("summary-cards");
+  const ret = p.portfolio_return_pct != null ? fmtPct(p.portfolio_return_pct) : "—";
+  const alpha = p.alpha_pct != null ? fmtPct(p.alpha_pct) : "—";
   cards.innerHTML = `
-    <div class="card"><div class="label">NAV</div><div class="value">${fmtIls(p.nav_ils)}</div></div>
+    <div class="card"><div class="label">NAV</div><div class="value">${fmtIls(p.nav_ils)}</div><div class="sub">session start ${fmtIls(sess.initial_nav_ils)}</div></div>
+    <div class="card"><div class="label">Return vs session</div><div class="value">${ret}</div><div class="sub">α vs TA-35 ${alpha}</div></div>
     <div class="card"><div class="label">Cash</div><div class="value">${fmtIls(p.cash_ils)}</div><div class="sub">${p.cash_pct}% of NAV</div></div>
-    <div class="card"><div class="label">Benchmark</div><div class="value">${sess.benchmark_symbol || "TA35.TA"}</div><div class="sub">start ${sess.benchmark_start_px ?? "—"}</div></div>
-    <div class="card"><div class="label">Last cycle</div><div class="value" style="font-size:0.95rem">${p.last_cycle_ts || "—"}</div></div>
+    <div class="card"><div class="label">Benchmark</div><div class="value">${sess.benchmark_symbol || "TA35.TA"}</div><div class="sub">TA-35 ${fmtPct(p.benchmark_return_pct)} · start ${sess.benchmark_start_px ?? "—"}</div></div>
   `;
 
   const tbody = document.querySelector("#positions-table tbody");

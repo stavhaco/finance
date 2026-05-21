@@ -24,12 +24,16 @@ def _last_price(t: yf.Ticker) -> float | None:
     return None
 
 
-def _price_ils(last: float, currency: str | None) -> float:
+def price_to_ils(last: float, currency: str | None) -> float:
     """Yahoo often quotes Israeli stocks in agorot (ILA); convert to shekels for NAV/trades."""
     px = float(last)
     if currency == "ILA":
         return px / 100.0
     return px
+
+
+def _price_ils(last: float, currency: str | None) -> float:
+    return price_to_ils(last, currency)
 
 
 def fetch_last_prices(symbols: Iterable[str]) -> dict[str, Quote]:
