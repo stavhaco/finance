@@ -199,6 +199,17 @@ With `DEMO_TRADER_ENFORCE_TASE_HOURS=1`, buys/sells run only **Sunâ€“Thu 09:00â€
 PYTHONPATH=. python -m unittest discover -s tests -v
 ```
 
+## Agent / CI dry-run (no Ollama)
+
+Cloud agents and CI can run a full cycle (ingest, prices, paper broker, cycle JSON log) without a local LLM:
+
+```bash
+./scripts/ci/run_cycle_dry.sh
+# or: DEMO_TRADER_DRY_RUN=1 python -m demo_trader --once --dry-run
+```
+
+Production on your Mac Mini should use real Ollama (`--dry-run` off).
+
 ## Limitations
 
 - Yahoo `.TA` data can be delayed or wrong.

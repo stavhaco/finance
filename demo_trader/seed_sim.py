@@ -47,7 +47,8 @@ def main(argv: list[str] | None = None) -> int:
         lookback_days=lookback,
         breaking_limit=cfg.maya_breaking_limit,
         post_max_keep=cfg.maya_post_max_keep,
-        timeout_sec=cfg.maya_http_timeout_sec,
+        connect_timeout_sec=cfg.maya_http_connect_timeout_sec,
+        read_timeout_sec=cfg.maya_http_read_timeout_sec,
     )
     n_maya = ingest_maya_rows(conn, maya_rows, cfg=cfg)
     print(f"Maya: fetched={len(maya_rows)} inserted_or_new≈{n_maya}")

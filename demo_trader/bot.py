@@ -29,6 +29,7 @@ from demo_trader.market_data import fetch_last_prices, prices_map
 from demo_trader.maya_client import maya_digest_for_prompt, normalize_maya_items
 from demo_trader.news_feeds import fetch_headlines, headlines_digest, mock_headlines
 from demo_trader.cycle_log import write_cycle_report
+from demo_trader.dry_run import dry_run_decision
 from demo_trader.ollama_client import build_hebrew_trader_prompt, chat_json
 from demo_trader.paper_broker import Quote, execute_trade, portfolio_nav
 from demo_trader.sim_clock import advance_sim_now, load_sim_now
@@ -297,13 +298,22 @@ def run_cycle(cfg: Config) -> int:
     }
 
     try:
-        decision = chat_json(
-            base_url=cfg.ollama_base_url,
-            model=cfg.ollama_model,
-            system=system,
-            user=user,
-            timeout_sec=cfg.ollama_timeout_sec,
-        )
+        if cfg.dry_run:
+            print("DRY_RUN: skipping Ollama; using deterministic stub decision.", flush=True)
+            decision = dry_run_decision(
+                watchlist=cfg.watchlist,
+                trading_allowed=trading_allowed,
+                max_trades=cfg.max_trades_per_cycle,
+                min_buys_when_trading=cfg.min_buys_when_trading,
+            )
+        else:
+            decision = chat_json(
+                base_url=cfg.ollama_base_url,
+                model=cfg.ollama_model,
+                system=system,
+                user=user,
+                timeout_sec=cfg.ollama_timeout_sec,
+            )
     except Exception as e:
         print(f"ERROR: Ollama call failed: {e}", file=sys.stderr)
         traceback.print_exc()
@@ -682,6 +692,11 @@ def run_cycle(cfg: Config) -> int:
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description="TA-35 paper trader with Hebrew context, SQLite audit log, and Ollama.")
     p.add_argument("--once", action="store_true", help="Run a single cycle then exit.")
+    p.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Skip Ollama; use deterministic stub trades (CI / agent iteration).",
+    )
     p.add_argument("--interval-minutes", type=int, default=None, help="Override DEMO_TRADER_INTERVAL_MINUTES.")
     p.add_argument("--model", type=str, default=None, help="Override OLLAMA_MODEL.")
     args = p.parse_args(argv)
@@ -691,6 +706,7 @@ def main(argv: list[str] | None = None) -> int:
         cfg0,
         ollama_model=args.model or cfg0.ollama_model,
         interval_minutes=args.interval_minutes or cfg0.interval_minutes,
+        dry_run=args.dry_run or cfg0.dry_run,
     )
 
     if args.once:

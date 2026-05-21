@@ -164,6 +164,7 @@ class Config:
     cycle_log_full_prompts: bool = field(
         default_factory=lambda: _env_bool("DEMO_TRADER_CYCLE_LOG_FULL_PROMPTS", True)
     )
+    dry_run: bool = field(default_factory=lambda: _env_bool("DEMO_TRADER_DRY_RUN", False))
 
     def rss_feeds(self) -> Sequence[str]:
         raw = _env_str(
