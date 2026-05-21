@@ -34,7 +34,7 @@ from demo_trader.paper_broker import Quote, execute_trade, portfolio_nav
 from demo_trader.sim_clock import advance_sim_now, load_sim_now
 from demo_trader.state_store import _utc_now_iso, load_state, save_state
 from demo_trader.ta35_catalog import TA35_COMPANIES, knowledge_catalog_digest
-from demo_trader.tase_calendar import is_tase_regular_trading_hours, next_tase_regular_session_open_utc
+from demo_trader.tase_calendar import IL_TZ, is_tase_regular_trading_hours, next_tase_regular_session_open_utc
 from demo_trader.time_utils import (
     maya_publish_to_utc_iso,
     parse_sim_start_iso,
@@ -193,13 +193,18 @@ def run_cycle(cfg: Config) -> int:
             headlines = mock_headlines()
         inserted = ingest_headlines(conn, headlines, cfg=cfg)
 
-        maya_rows = normalize_maya_items(
-            lookback_days=cfg.maya_lookback_days,
-            breaking_limit=cfg.maya_breaking_limit,
-            post_max_keep=cfg.maya_post_max_keep,
-            timeout_sec=cfg.maya_http_timeout_sec,
-        )
-        maya_inserted = ingest_maya_rows(conn, maya_rows, cfg=cfg)
+        if cfg.maya_enabled:
+            maya_rows = normalize_maya_items(
+                lookback_days=cfg.maya_lookback_days,
+                breaking_limit=cfg.maya_breaking_limit,
+                post_max_keep=cfg.maya_post_max_keep,
+                connect_timeout_sec=cfg.maya_http_connect_timeout_sec,
+                read_timeout_sec=cfg.maya_http_read_timeout_sec,
+            )
+            maya_inserted = ingest_maya_rows(conn, maya_rows, cfg=cfg)
+        else:
+            maya_rows = []
+            maya_inserted = 0
 
     if cfg.simulation and not cfg.sim_ingest_live:
         maya_digest = (
@@ -239,11 +244,17 @@ def run_cycle(cfg: Config) -> int:
             f"bars={cfg.price_bar_interval} | ingest_live={cfg.sim_ingest_live} | "
             f"skip_closed={cfg.sim_skip_closed_hours}"
         )
+    ref_wall = sim_now if cfg.simulation and sim_now is not None else datetime.now(timezone.utc)
+    il_now = ref_wall.astimezone(IL_TZ).strftime("%Y-%m-%d %H:%M %Z")
     print(
-        f"tase_trading_allowed={trading_allowed} (enforce_hours={cfg.enforce_tase_hours}) | "
+        f"il_local={il_now} | tase_trading_allowed={trading_allowed} "
+        f"(enforce_hours={cfg.enforce_tase_hours}) | "
         f"rss_headlines={len(headlines)} | rss_db_new≈{inserted} | "
-        f"maya_rows={len(maya_rows)} maya_db_new≈{maya_inserted}"
+        f"maya_enabled={cfg.maya_enabled} maya_rows={len(maya_rows)} maya_db_new≈{maya_inserted}"
     )
+    if not trading_allowed and cfg.enforce_tase_hours:
+        nxt = next_tase_regular_session_open_utc(ref_wall)
+        print(f"next_tase_open_utc={nxt.isoformat()} (trades execute only inside Sun–Thu 09:00–17:35 IL)")
     print(_fmt_perf(perf_pre))
 
     article_context_en = trader_knowledge_digest_en(

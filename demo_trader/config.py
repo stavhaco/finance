@@ -92,10 +92,22 @@ class Config:
     news_max_headlines: int = field(default_factory=lambda: max(5, _env_int("DEMO_TRADER_NEWS_MAX", 60)))
     ollama_timeout_sec: int = field(default_factory=lambda: max(30, _env_int("DEMO_TRADER_OLLAMA_TIMEOUT_SEC", 240)))
     knowledge_prompt_rows: int = field(default_factory=lambda: max(10, _env_int("DEMO_TRADER_KNOWLEDGE_DB_ROWS", 80)))
+    maya_enabled: bool = field(default_factory=lambda: _env_bool("DEMO_TRADER_MAYA_ENABLED", True))
     maya_lookback_days: int = field(default_factory=lambda: max(1, _env_int("DEMO_TRADER_MAYA_LOOKBACK_DAYS", 5)))
     maya_breaking_limit: int = field(default_factory=lambda: max(5, _env_int("DEMO_TRADER_MAYA_BREAKING_LIMIT", 80)))
     maya_post_max_keep: int = field(default_factory=lambda: max(10, _env_int("DEMO_TRADER_MAYA_POST_MAX_KEEP", 150)))
-    maya_http_timeout_sec: int = field(default_factory=lambda: max(15, _env_int("DEMO_TRADER_MAYA_HTTP_TIMEOUT_SEC", 60)))
+    maya_http_connect_timeout_sec: int = field(
+        default_factory=lambda: max(3, _env_int("DEMO_TRADER_MAYA_HTTP_CONNECT_TIMEOUT_SEC", 10))
+    )
+    maya_http_read_timeout_sec: int = field(
+        default_factory=lambda: max(
+            5,
+            _env_int(
+                "DEMO_TRADER_MAYA_HTTP_READ_TIMEOUT_SEC",
+                _env_int("DEMO_TRADER_MAYA_HTTP_TIMEOUT_SEC", 25),
+            ),
+        )
+    )
     enforce_tase_hours: bool = field(
         default_factory=lambda: _env_bool("DEMO_TRADER_ENFORCE_TASE_HOURS", True)
     )

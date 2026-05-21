@@ -165,6 +165,16 @@ python -m demo_trader --once
 
 - Breaking announcements: API **`limit` max 5** (client caps automatically).
 - Report text: enrichment prefers **HTM/PDF attachment URLs** from Maya JSON (not the SPA page URL).
+- Fetches run **in parallel** with separate connect/read timeouts (defaults 10s / 25s) so a dead network fails in ~10s per attempt, not 4×60s.
+- If `maya.tase.co.il` times out from your Mac (VPN, firewall, ISP): set `DEMO_TRADER_MAYA_ENABLED=0` — RSS + SQLite knowledge still feed the model; digest shows "לא נמשכו דיווחים".
+
+### urllib3 / LibreSSL warning (macOS)
+
+Harmless on Apple Python builds. To hide: `export PYTHONWARNINGS="ignore:urllib3.exceptions.NotOpenSSLWarning"`.
+
+### Trades blocked outside TASE hours
+
+With `DEMO_TRADER_ENFORCE_TASE_HOURS=1`, buys/sells run only **Sun–Thu 09:00–17:35 Israel time**. The model may still suggest trades; the bot prints `blocked trade (after hours)` and `next_tase_open_utc=...`. For overnight testing only: `DEMO_TRADER_ENFORCE_TASE_HOURS=0` (not realistic for production).
 
 ## Trading / Ollama env vars
 

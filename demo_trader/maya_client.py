@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Iterable
@@ -98,7 +99,16 @@ class MayaKnowledgeRow:
     snippet: str
 
 
-def fetch_breaking_announcements(limit: int, *, timeout_sec: int = 60) -> list[dict[str, Any]]:
+def _http_timeout(connect_sec: int, read_sec: int) -> tuple[float, float]:
+    return (float(max(1, connect_sec)), float(max(1, read_sec)))
+
+
+def fetch_breaking_announcements(
+    limit: int,
+    *,
+    connect_timeout_sec: int = 10,
+    read_timeout_sec: int = 25,
+) -> list[dict[str, Any]]:
     # API returns 400 if limit is not in 1..5 ("'Limit' חייב להיות בין 1 לבין 5").
     req_limit = min(5, max(1, int(limit)))
     if req_limit < int(limit):
@@ -112,19 +122,30 @@ def fetch_breaking_announcements(limit: int, *, timeout_sec: int = 60) -> list[d
         url,
         params={"limit": req_limit},
         headers=_headers("/he/reports/breaking-announcements"),
-        timeout=timeout_sec,
+        timeout=_http_timeout(connect_timeout_sec, read_timeout_sec),
     )
     r.raise_for_status()
     data = r.json()
     return data if isinstance(data, list) else []
 
 
-def _post_list(path: str, body: dict[str, Any] | None, *, timeout_sec: int) -> list[dict[str, Any]]:
+def _post_list(
+    path: str,
+    body: dict[str, Any] | None,
+    *,
+    connect_timeout_sec: int,
+    read_timeout_sec: int,
+) -> list[dict[str, Any]]:
     url = f"{MAYA_BASE}/api/v1/reports/{path}"
     hdrs = _headers(f"/he/reports/{path.split('/')[0]}")
     hdrs["Content-Type"] = "application/json"
     try:
-        r = requests.post(url, json=body or {}, headers=hdrs, timeout=timeout_sec)
+        r = requests.post(
+            url,
+            json=body or {},
+            headers=hdrs,
+            timeout=_http_timeout(connect_timeout_sec, read_timeout_sec),
+        )
         if r.status_code >= 400:
             logger.warning("Maya POST %s failed: HTTP %s", path, r.status_code)
             return []
@@ -135,16 +156,20 @@ def _post_list(path: str, body: dict[str, Any] | None, *, timeout_sec: int) -> l
         return []
 
 
-def fetch_companies_reports(*, timeout_sec: int = 60) -> list[dict[str, Any]]:
-    return _post_list("companies", {}, timeout_sec=timeout_sec)
+def fetch_companies_reports(
+    *, connect_timeout_sec: int = 10, read_timeout_sec: int = 25
+) -> list[dict[str, Any]]:
+    return _post_list("companies", {}, connect_timeout_sec=connect_timeout_sec, read_timeout_sec=read_timeout_sec)
 
 
-def fetch_tase_reports(*, timeout_sec: int = 60) -> list[dict[str, Any]]:
-    return _post_list("tase", {}, timeout_sec=timeout_sec)
+def fetch_tase_reports(*, connect_timeout_sec: int = 10, read_timeout_sec: int = 25) -> list[dict[str, Any]]:
+    return _post_list("tase", {}, connect_timeout_sec=connect_timeout_sec, read_timeout_sec=read_timeout_sec)
 
 
-def fetch_financial_reports(*, timeout_sec: int = 60) -> list[dict[str, Any]]:
-    return _post_list("finance", {}, timeout_sec=timeout_sec)
+def fetch_financial_reports(
+    *, connect_timeout_sec: int = 10, read_timeout_sec: int = 25
+) -> list[dict[str, Any]]:
+    return _post_list("finance", {}, connect_timeout_sec=connect_timeout_sec, read_timeout_sec=read_timeout_sec)
 
 
 def normalize_maya_items(
@@ -152,16 +177,47 @@ def normalize_maya_items(
     lookback_days: int,
     breaking_limit: int,
     post_max_keep: int,
-    timeout_sec: int,
+    connect_timeout_sec: int = 10,
+    read_timeout_sec: int = 25,
 ) -> list[MayaKnowledgeRow]:
     cutoff = datetime.now(timezone.utc) - timedelta(days=max(1, int(lookback_days)))
     rows: list[MayaKnowledgeRow] = []
+    ct = int(connect_timeout_sec)
+    rt = int(read_timeout_sec)
 
-    try:
-        breaking = fetch_breaking_announcements(breaking_limit, timeout_sec=timeout_sec)
-    except Exception as e:
-        logger.warning("Maya breaking fetch failed: %s", e)
-        breaking = []
+    breaking: list[dict[str, Any]] = []
+    companies: list[dict[str, Any]] = []
+    tase: list[dict[str, Any]] = []
+    finance: list[dict[str, Any]] = []
+
+    def _breaking() -> list[dict[str, Any]]:
+        return fetch_breaking_announcements(
+            breaking_limit, connect_timeout_sec=ct, read_timeout_sec=rt
+        )
+
+    tasks = {
+        "breaking": _breaking,
+        "companies": lambda: fetch_companies_reports(connect_timeout_sec=ct, read_timeout_sec=rt),
+        "tase": lambda: fetch_tase_reports(connect_timeout_sec=ct, read_timeout_sec=rt),
+        "finance": lambda: fetch_financial_reports(connect_timeout_sec=ct, read_timeout_sec=rt),
+    }
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        futures = {pool.submit(fn): name for name, fn in tasks.items()}
+        for fut in as_completed(futures):
+            name = futures[fut]
+            try:
+                data = fut.result()
+            except Exception as e:
+                logger.warning("Maya %s fetch failed: %s", name, e)
+                data = []
+            if name == "breaking":
+                breaking = data
+            elif name == "companies":
+                companies = data
+            elif name == "tase":
+                tase = data
+            else:
+                finance = data
 
     for it in breaking:
         if not isinstance(it, dict):
@@ -219,9 +275,9 @@ def normalize_maya_items(
             if kept >= post_max_keep:
                 break
 
-    _consume(fetch_companies_reports(timeout_sec=timeout_sec), "companies", "companies")
-    _consume(fetch_tase_reports(timeout_sec=timeout_sec), "tase", "tase")
-    _consume(fetch_financial_reports(timeout_sec=timeout_sec), "finance", "financial-report")
+    _consume(companies, "companies", "companies")
+    _consume(tase, "tase", "tase")
+    _consume(finance, "finance", "financial-report")
 
     rows.sort(key=lambda r: r.publish_raw or "", reverse=True)
     return rows
