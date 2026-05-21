@@ -13,6 +13,8 @@ class TestDryRun(unittest.TestCase):
         )
         self.assertTrue(d["trades"])
         self.assertEqual(d["trades"][0]["side"], "buy")
+        self.assertIn("why_en", d["trades"][0])
+        self.assertEqual(len(d["recommendations"]), 2)
 
     def test_no_trades_when_blocked(self) -> None:
         d = dry_run_decision(

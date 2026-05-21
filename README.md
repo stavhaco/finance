@@ -49,7 +49,7 @@ Typical fields:
 | `performance_before` / `performance_after` | NAV, return vs benchmark |
 | `portfolio_after` | Cash %, positions (includes `cash_pct_of_nav`, deployment target) |
 | `prompt.sections` | Each input block sent to Ollama (`preview` + optional `full`) |
-| `model_response` | Parsed JSON from Ollama (`analysis_he`, `trades`, …) |
+| `model_response` | Parsed JSON from Ollama (`analysis_he`, `recommendations[]` with `why_en` / `evidence_news_ids` / `evidence_quote`, plus executable `trades`) |
 | `executions` | What the bot recorded (fills, skips, `reason_he`) |
 
 Env vars:
@@ -203,10 +203,9 @@ pip install -r requirements.txt
 # open http://127.0.0.1:8765/
 ```
 
-- **Tab 1:** NAV summary, benchmark with full index name where known, allocation as horizontal bars (% of NAV, no chart library), positions with Hebrew + English issuer names alongside tickers, cycle cards with expandable model narrative (`analysis_he`), and per-trade `reason_he` plus any `by_symbol[].rationale_he` merged from cycle JSON logs.
-- **Tab 2:** Knowledge center (`matched_company_label` where the row maps to TA-35; Maya-only filter).
-- **Tab 3 — Run supervision:** Files + SQLite table inventory, indexed cycle JSON audit files, inspector for prompts/model output/decisions (`/api/supervision/*`). Requires `DEMO_TRADER_CYCLE_LOG_ENABLED=1` to populate JSON snapshots.
-- **Refresh:** Updates only when you choose **Refresh now**, change timeframe, toggle filters, switch tabs (supervision auto-loads on first open). Optional checkbox **Auto-refresh every 2 min** replaces the old 60s forced reload.
+- **Tab 1:** NAV, cash %, holdings chart, cycle timeline (market open/closed, buy/sell/blocked + reasons, vs TA-35).
+- **Tab 2:** Knowledge center (executive summaries; optional Maya-only filter).
+- Timeframe: 1d / 7d / 30d / 90d / 1y (auto-refresh every 60s).
 
 Uses SQLite **WAL + read-only** connections so the dashboard does not lock the trading loop.
 

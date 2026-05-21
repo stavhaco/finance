@@ -79,12 +79,19 @@ def _model_decision_hints(mr: Any) -> tuple[str, dict[str, str]]:
         return "", {}
     ana = str(mr.get("analysis_he") or "").strip()
     by_sym: dict[str, str] = {}
+    for row in mr.get("recommendations") or []:
+        if not isinstance(row, dict):
+            continue
+        s = str(row.get("symbol") or "").strip()
+        why = str(row.get("why_en") or "").strip()
+        if s and why:
+            by_sym[s] = why
     for row in mr.get("by_symbol") or []:
         if not isinstance(row, dict):
             continue
         s = str(row.get("symbol") or "").strip()
         rationale = str(row.get("rationale_he") or "").strip()
-        if s and rationale:
+        if s and rationale and s not in by_sym:
             by_sym[s] = rationale
     return ana, by_sym
 

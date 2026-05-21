@@ -301,23 +301,22 @@ def trader_knowledge_digest_en(
     as_of_utc: datetime | None = None,
     translation_snippet_chars: int = 600,
 ) -> str:
-    """English trader-facing digest: TA-35-relevant rows, high usefulness, or broad market (must be enrichment_status=ok)."""
+    """English markdown table for the trader prompt: enriched rows matched to TA-35 symbols only."""
     from demo_trader.ta35_catalog import ta35_symbols
 
     syms = list(dict.fromkeys([*ta35_symbols(), benchmark_symbol]))
     placeholders = ",".join(["?"] * len(syms))
+    sym_clause = f"matched_symbol IS NOT NULL AND matched_symbol IN ({placeholders})"
+
+    base_where = f"enrichment_status = 'ok' AND {sym_clause}"
+
     if as_of_utc is None:
         cur = conn.execute(
             f"""
-            SELECT ts, event_time, source, matched_symbol, title_en, body_translation_en,
-                   executive_summary_en, sentiment, trade_usefulness, is_broad_market
+            SELECT id, ts, event_time, source, matched_symbol, title_en, body_translation_en,
+                   executive_summary_en, sentiment, trade_usefulness
             FROM knowledge_events
-            WHERE enrichment_status = 'ok'
-              AND (
-                    matched_symbol IN ({placeholders})
-                 OR trade_usefulness = 'high'
-                 OR is_broad_market = 1
-              )
+            WHERE {base_where}
             ORDER BY datetime(COALESCE(event_time, ts)) DESC
             LIMIT ?
             """,
@@ -327,43 +326,50 @@ def trader_knowledge_digest_en(
         as_iso = as_of_utc.astimezone(timezone.utc).replace(microsecond=0).isoformat()
         cur = conn.execute(
             f"""
-            SELECT ts, event_time, source, matched_symbol, title_en, body_translation_en,
-                   executive_summary_en, sentiment, trade_usefulness, is_broad_market
+            SELECT id, ts, event_time, source, matched_symbol, title_en, body_translation_en,
+                   executive_summary_en, sentiment, trade_usefulness
             FROM knowledge_events
-            WHERE enrichment_status = 'ok'
+            WHERE {base_where}
               AND (COALESCE(event_time, ts) <= ?)
-              AND (
-                    matched_symbol IN ({placeholders})
-                 OR trade_usefulness = 'high'
-                 OR is_broad_market = 1
-              )
             ORDER BY datetime(COALESCE(event_time, ts)) DESC
             LIMIT ?
             """,
-            (as_iso, *syms, int(limit)),
+            (*syms, as_iso, int(limit)),
         )
 
     rows = cur.fetchall()
     if not rows:
-        return "(No enriched knowledge_events yet for TA-35 / broad / high-usefulness filters — run backfill or wait for ingest enrichment.)"
-    lines: list[str] = ["Enriched knowledge (English; stored in DB):", ""]
+        return (
+            "(No enriched TA-35–matched knowledge_events in this window — cite evidence_news_ids as [] "
+            "unless Hebrew RSS lines contain actionable facts.)"
+        )
+    hdr = (
+        "Knowledge center — TA-35 matched rows only (`knowledge_events`). "
+        "Cite rows using integer **news_id** in `evidence_news_ids`.\n\n"
+        "| news_id | date | symbol | source | title_en | executive_summary_en | translation_excerpt |\n"
+        "| ---:| --- | --- | --- | --- | --- | --- |"
+    )
+    lines = [hdr]
+    excerpt_max = max(120, int(translation_snippet_chars))
     for r in rows:
-        sym = r["matched_symbol"] or "—"
-        when = r["event_time"] or r["ts"]
-        title_en = (r["title_en"] or "").strip() or "(no title_en)"
-        summary = (r["executive_summary_en"] or "").strip() or "(no summary)"
+        sym = str(r["matched_symbol"] or "").strip()
+        when = str(r["event_time"] or r["ts"])
+        title_en = _markdown_cell(r["title_en"], max_len=160)
+        summary = _markdown_cell(r["executive_summary_en"], max_len=320)
         body = (r["body_translation_en"] or "").strip()
-        ex = body[: max(0, int(translation_snippet_chars))].rstrip()
+        ex = body[: excerpt_max].rstrip()
         if len(body) > len(ex):
             ex += "..."
+        excerpt = _markdown_cell(ex or "(empty)", max_len=excerpt_max + 8)
         lines.append(
-            f"- [{when}] {r['source']} | {sym} | usefulness={r['trade_usefulness']} | "
-            f"sentiment={r['sentiment']} | broad_market={int(r['is_broad_market'] or 0)}\n"
-            f"  title_en: {title_en}\n"
-            f"  executive_summary_en: {summary}\n"
-            f"  translation_en_excerpt: {ex or '(empty)'}"
+            f"| {int(r['id'])} | {_markdown_cell(when, max_len=28)} | {_markdown_cell(sym, max_len=14)} | "
+            f"{_markdown_cell(r['source'], max_len=22)} | {title_en} | {summary} | {excerpt} |"
         )
-    return "\n".join(lines)
+    tail = (
+        "\n\nsentiment/usefulness columns omitted here to save tokens; "
+        "trust title_en / executive_summary_en / excerpt for reasoning."
+    )
+    return "\n".join(lines) + tail
 
 
 def insert_cycle(

@@ -15,33 +15,44 @@ def dry_run_decision(
     if not syms:
         syms = list(watchlist)[:3]
 
-    by_symbol = [
-        {
-            "symbol": sym,
-            "stance": "buy",
-            "buy_lo": None,
-            "buy_hi": None,
-            "sell_lo": None,
-            "sell_hi": None,
-            "rationale_he": "DRY_RUN: בדיקת צינור — החזקת מזומן נמוכה, קנייה מתונה.",
-        }
-        for sym in syms
-    ]
+    trade_targets: list[str] = []
+    if trading_allowed and min_buys_when_trading > 0:
+        trade_targets = syms[: min(len(syms), min_buys_when_trading, max_trades)]
 
     trades: list[dict[str, Any]] = []
-    if trading_allowed and min_buys_when_trading > 0:
-        for sym in syms[: min(len(syms), min_buys_when_trading, max_trades)]:
-            trades.append(
-                {
-                    "symbol": sym,
-                    "side": "buy",
-                    "qty": 10,
-                    "reason_he": "DRY_RUN: פריסת הון מתונה (ללא Ollama).",
-                }
-            )
+    for sym in trade_targets:
+        trades.append(
+            {
+                "symbol": sym,
+                "side": "buy",
+                "qty": 10,
+                "why_en": "DRY_RUN: modest diversification stub without Ollama.",
+                "evidence_news_ids": [],
+                "evidence_quote": "",
+            }
+        )
+
+    recommendations: list[dict[str, Any]] = []
+    for sym in watchlist:
+        stance = "buy" if sym in trade_targets else "hold"
+        if not trading_allowed:
+            stance = "hold"
+        recommendations.append(
+            {
+                "symbol": sym,
+                "stance": stance,
+                "why_en": (
+                    "DRY_RUN: deployment stub when trading allowed."
+                    if stance == "buy"
+                    else "DRY_RUN: hold in stub mode."
+                ),
+                "evidence_news_ids": [],
+                "evidence_quote": "",
+            }
+        )
 
     return {
-        "analysis_he": "DRY_RUN: מחזור בדיקה — ללא קריאה ל-Ollama. מטרה: אימות ingest, מחירים, ביצוע עסקאות ולוג מחזור.",
-        "by_symbol": by_symbol,
+        "analysis_he": "DRY_RUN: תקציר קצר בעברית ללוג מחזור.",
+        "recommendations": recommendations,
         "trades": trades,
     }

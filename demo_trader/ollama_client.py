@@ -164,12 +164,13 @@ def build_hebrew_trader_prompt(
 ) -> tuple[str, str]:
     system = (
         "אתה סוחר ניירות (paper trading) זהיר בשוק הישראלי. "
-        "עליך להחזיר JSON בלבד (בלי markdown). "
-        "המטרה: להשוות ביצועים למדד ת\"א-35 (פרוקסי דרך Yahoo Finance). "
-        "אין לך ספר פקודות אמיתי; אל תבטיח רווחים. "
-        "השתמש בעברית בשדות rationale/analysis/reason. "
-        "כשמותר לסחור: העדף להחזיק מזומן נמוך — פרוס הון על מניות TA-35 בגודל מתון (סיכון נמוך), "
-        "לא להשאיר את רוב התיק במזומן לאורך זמן."
+        "עליך להחזיר JSON תקף בלבד (בלי markdown או טקסט נוסף). "
+        "השוואת ביצועים למדד ת\"א-35 (פרוקסי דרך Yahoo Finance). "
+        "אין ספר פקודות אמיתי — אל תבטיח רווחים. "
+        "כל ההיגיון העסקי למנהלים חייב להיות באנגלית בשדות why_en ו-evidence_* שמתבססים על טבלת Knowledge center "
+        "(עמודת news_id שלמה בלבד ב-evidence_news_ids). "
+        "analysis_he הוא משפט תקציר קצר בעברית ללוג פנימי (יכול להיות מחרוזת ריקה). "
+        "כשמותר לסחור: העדף מזומן נמוך — פריסת פוזיציות מתונה על TA-35 (סיכון נמוך)."
     )
     gate = "כן" if trading_allowed else "לא"
     user = f"""האם כרגע מותר לבצע פעולות מסחר (חלון מסחר פשוט בת\"א)? {gate}
@@ -180,7 +181,7 @@ def build_hebrew_trader_prompt(
 קטלוג וקטגוריות TA-35 (מאגר ידע בסיסי):
 {catalog_digest}
 
-מאגר ידע מהרצות קודמות (התאמות כותרות לחברות):
+מאגר ידע מהרצות קודמות (מסונן ל-TA-35 בלבד; כולל news_id לציטוט):
 {knowledge_digest}
 
 נתוני חברות מהמסד (שווי שוק, תשואות הלכה למעשה, מכפילים – Yahoo):
@@ -198,35 +199,42 @@ def build_hebrew_trader_prompt(
 כותרות חדשות (RSS, בעברית ככל האפשר):
 {news_text}
 
-Enriched knowledge center (English; full translation + executive summary stored in SQLite; excerpt shown):
+Knowledge center (English table; SQLite-enriched TA-35 rows only — cite **news_id** integers here):
 {article_context_en or "(none)"}
 
 החזר JSON בצורה:
 {{
-  "analysis_he": "ניתוח קצר",
-  "by_symbol": [
+  "analysis_he": "",
+  "recommendations": [
     {{
       "symbol": "TEVA.TA",
-      "stance": "buy|sell|hold",
-      "buy_lo": null,
-      "buy_hi": null,
-      "sell_lo": null,
-      "sell_hi": null,
-      "rationale_he": "הסבר קצר"
+      "stance": "hold",
+      "why_en": "English paragraph explaining stance vs NEW information.",
+      "evidence_news_ids": [],
+      "evidence_quote": "Short English phrase grounded in cited rows."
     }}
   ],
   "trades": [
-    {{"symbol": "TEVA.TA", "side": "buy", "qty": 10, "reason_he": "..."}}
+    {{
+      "symbol": "TEVA.TA",
+      "side": "buy",
+      "qty": 10,
+      "why_en": "English — must align with recommendation for same symbol.",
+      "evidence_news_ids": [],
+      "evidence_quote": ""
+    }}
   ]
 }}
 
-חוקים:
-- trades: לכל היותר {max_trades} עסקאות
-- אם אסור מסחר כרגע (לא), החזר trades ריק בכל מקרה, אבל עדיין מלא analysis_he ו-by_symbol
-- אם מותר לסחור (כן) ו-cash_pct_of_nav מעל {max_cash_pct_target:.0f}%: הצע לפחות {min_buys_when_trading} קנייה/ות buy בגודל מתון
-  ב-{max_trades} מניות שונות (פיזור), לא "הכל או כלום". מכירות sell רק אם יש סיבה ברורה.
-- סיכון נמוך: עדיף כמה פוזיציות קטנות מאשר hold מלא עם מזומן גבוה
-- לכל trade חובה reason_he בעברית (לא רק "מודל")
-- side רק buy או sell; qty חיובי (מניות שלמות, לא חלקי מניה)
+חוקים מחייבים:
+- recommendations: בדיוק פריט אחד לכל סימבול בסדר הרשימה {list(watchlist)}
+- stance בכל המלצה חייב להיות במדויק באנגלית האחת מהערכים buy או sell או hold (מחרוזת יחידה, לא רשימת אפשרויות)
+- evidence_news_ids: מערך שלמים מהעמודה news_id בטבלה האנגלית בלבד; אם אין התאמה ישירה — מערך ריק []
+- evidence_quote: באנגלית, משפט קצר שמשקף ציטוט מהידיעות שצורפו (יכול להיות ריק רק אם evidence_news_ids ריק)
+- trades: לכל היותר {max_trades} עסקאות ביצוע (buy/sell עם qty חיובי שלם)
+- אם אסור מסחר כרגע (לא), החזר trades תמיד ריק [], אך המלא recommendations באופן מלא
+- אם מותר לסחור (כן) ויש מזומן גבוה ביחס ל-NAV (ראה תיק): הצע לפחות {min_buys_when_trading} קנייות buy מתונות בעד {max_trades} סימבולים שונים — והצג stance=buy בהמלצה וב-trade באותו סימבול
+- כל שורת trade חייבת לכלול את אותם שדות why_en / evidence_news_ids / evidence_quote כמו ההחלטה הלוגית עבור אותו סימבול
+- side רק buy או sell
 """
     return system, user

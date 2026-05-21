@@ -123,6 +123,26 @@ def _filter_headlines_for_sim(headlines: list, sim_now: datetime) -> list:
 
 
 
+
+def _trade_audit_reason(raw: dict[str, Any]) -> str:
+    """Audit text from English evidence fields (preferred) or legacy Hebrew reason_he."""
+    why = str(raw.get("why_en") or "").strip()
+    ids = raw.get("evidence_news_ids")
+    quote = str(raw.get("evidence_quote") or "").strip()
+    legacy = str(raw.get("reason_he") or raw.get("reason") or "").strip()
+    parts: list[str] = []
+    if why:
+        parts.append(f"[why_en] {why}")
+    if ids not in (None, [], ()):
+        parts.append(f"[evidence_news_ids] {ids}")
+    if quote:
+        parts.append(f"[evidence_quote] {quote}")
+    if parts:
+        return "\n".join(parts)[:900]
+    return legacy[:900] if legacy else "מודל"
+
+
+
 def run_cycle(cfg: Config) -> int:
     conn = open_db(cfg.db_path)
     upsert_companies(
@@ -235,6 +255,7 @@ def run_cycle(cfg: Config) -> int:
         conn,
         limit=cfg.knowledge_prompt_rows,
         as_of_utc=sim_now if cfg.simulation else None,
+        benchmark_symbol=cfg.benchmark_symbol,
     )
     catalog_digest = knowledge_catalog_digest()
     fundamentals_digest = companies_fundamentals_digest(conn, cfg.watchlist)
@@ -418,7 +439,7 @@ def run_cycle(cfg: Config) -> int:
             continue
         sym = str(raw.get("symbol", "")).strip()
         side = str(raw.get("side", "")).strip().lower()
-        reason_he = str(raw.get("reason_he", raw.get("reason", ""))).strip() or "מודל"
+        reason_he = _trade_audit_reason(raw)
         try:
             qty = float(raw.get("qty", 0.0))
         except (TypeError, ValueError):
