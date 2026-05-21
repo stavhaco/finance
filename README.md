@@ -207,7 +207,45 @@ The bot calls **`OLLAMA_BASE_URL`** (default `http://127.0.0.1:11434`). Ollama i
 |-------------|----------------|-----|
 | **Cloud agent VM** | Nothing listening on port 11434 | Install + start Ollama in the VM (see below). |
 | **Your Mac Mini** | Ollama.app not running, or wrong model name | Start Ollama; `ollama pull llama3.2` (or match `OLLAMA_MODEL` in `demo-trader.env`). |
-| **Agent → your Mac** | Agent cannot reach `127.0.0.1` on your machine | Set `OLLAMA_BASE_URL=http://<Mac-LAN-IP>:11434` and run Ollama with `OLLAMA_HOST=0.0.0.0` (only on a trusted network). |
+| **Agent → your Mac (bridge)** | Cloud VM’s `127.0.0.1` is not your Mac | See **Ollama bridge** below — one Ollama on the Mac, heavy models, agent calls over LAN/Tailscale. |
+
+### Ollama bridge (cloud agent uses your Mac Mini)
+
+Use your Mac for **heavy models**; the cloud agent only runs Python and HTTP-calls your Ollama.
+
+**On the Mac Mini** (once):
+
+```bash
+cd /Users/stavhacohen/projects/finance
+git pull origin main
+./scripts/mac/enable_ollama_lan.sh          # sets OLLAMA_HOST=0.0.0.0:11434
+# Quit Ollama from the menu bar, then open Ollama.app again
+./scripts/mac/show_ollama_bridge_url.sh     # pick a URL marked ✓ reachable
+```
+
+Create `scripts/ci/remote-ollama.env` (gitignored) on any machine that runs the agent:
+
+```bash
+cp scripts/ci/remote-ollama.env.example scripts/ci/remote-ollama.env
+# Edit: OLLAMA_BASE_URL=http://192.168.x.x:11434  (or Tailscale http://100.x.x.x:11434)
+#      OLLAMA_MODEL=llama3.2
+```
+
+**Test from the cloud agent** (or your laptop on the same network):
+
+```bash
+./scripts/ci/check_ollama_bridge.sh
+./scripts/ci/run_cycle_remote_ollama.sh
+```
+
+**Cursor Cloud Agent:** add the same variables in the agent environment (or commit `remote-ollama.env` only on a private branch — prefer env secrets):
+
+- `OLLAMA_BASE_URL=http://<mac-ip>:11434`
+- `OLLAMA_MODEL=llama3.2`
+
+**Security:** home LAN or **Tailscale** only; do not expose port 11434 to the public internet. macOS Firewall may ask to allow incoming connections for Ollama.
+
+**Tailscale (recommended off-LAN):** install on Mac Mini, use the `Tailscale` URL from `show_ollama_bridge_url.sh`.
 
 ### Cloud agent / Linux (local Ollama in the VM)
 
