@@ -205,7 +205,7 @@ pip install -r requirements.txt
 
 - **Tab 1:** NAV summary, benchmark with full index name where known, allocation as horizontal bars (% of NAV, no chart library), positions with Hebrew + English issuer names alongside tickers, cycle cards with expandable model narrative (`analysis_he`), and per-trade `reason_he` plus any `by_symbol[].rationale_he` merged from cycle JSON logs.
 - **Tab 2:** Knowledge center (`matched_company_label` where the row maps to TA-35; Maya-only filter).
-- **Tab 3 — Run supervision:** Files + SQLite table inventory, indexed cycle JSON audit files, inspector for prompts/model output/decisions (`/api/supervision/*`). Requires `DEMO_TRADER_CYCLE_LOG_ENABLED=1` to populate JSON snapshots.
+- **Tab 3 — Run supervision:** Files + SQLite table inventory, indexed cycle JSON audit files, inspector for prompts/model output/decisions (`/api/supervision/*`). The English enriched digest (`knowledge_en`) is folded by default so the inspector foregrounds **`cited_news_event_ids`** summaries when trades cite `knowledge_events` rows; browse Tab 2 for the full corpus. Requires `DEMO_TRADER_CYCLE_LOG_ENABLED=1` to populate JSON snapshots.
 - **Refresh:** Updates only when you choose **Refresh now**, change timeframe, toggle filters, switch tabs (supervision auto-loads on first open). Optional checkbox **Auto-refresh every 2 min** replaces the old 60s forced reload.
 
 Uses SQLite **WAL + read-only** connections so the dashboard does not lock the trading loop.

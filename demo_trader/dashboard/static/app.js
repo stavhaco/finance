@@ -38,6 +38,16 @@ function escapeHtml(s) {
     .replace(/"/g, "&quot;");
 }
 
+/** Hebrew / mixed rationale: escaped text in RTL-aware block (avoid <pre> bidi bugs). */
+function heRationaleBlock(text, compact = false) {
+  const t = (text ?? "").trim();
+  if (!t.length) {
+    return `<p class="muted rationale-empty">No rationale text stored for this row.</p>`;
+  }
+  const zs = compact ? " he-rationale--tight" : "";
+  return `<div class="he-rtl he-rationale${zs}" dir="rtl" lang="he">${escapeHtml(t)}</div>`;
+}
+
 async function fetchJson(url) {
   const r = await fetch(url);
   if (!r.ok) throw new Error(`${r.status} ${url}`);
@@ -149,16 +159,10 @@ function renderCycles(data) {
       const narrBlock =
         nar.length === 0
           ? ""
-          : `<details class="cycle-narr"><summary>Narrative from model (${nar.length.toLocaleString()} chars)</summary><pre class="rationale-pre">${escapeHtml(
-              nar
-            )}</pre></details>`;
+          : `<details class="cycle-narr"><summary>Narrative from model (${nar.length.toLocaleString()} chars)</summary>${heRationaleBlock(nar)}</details>`;
       const actions = (c.actions || [])
         .map((a) => {
-          const rl = escapeHtml((a.reason_he || "").trim());
-          const rlBlock =
-            rl.length === 0
-              ? `<p class="muted">No rationale text stored for this row.</p>`
-              : `<pre class="rationale-pre tight">${rl}</pre>`;
+          const rlBlock = heRationaleBlock(a.reason_he, true);
           const who = escapeHtml(a.company_label || a.symbol || "");
           if (a.type === "trade") {
             const side = (a.side || "").toLowerCase();
@@ -306,10 +310,39 @@ function formatPromptSectionBody(v) {
   return JSON.stringify(v, null, 2);
 }
 
+function citedArticlesHtml(items) {
+  const rows = Array.isArray(items) ? items : [];
+  if (!rows.length) {
+    return `<p class="muted">No <code>cited_news_event_ids</code> on this cycle’s trades. The full digest is tucked under Prompt blocks unless you expand it.</p>`;
+  }
+  return `
+    <div class="cited-articles-grid">
+      ${rows
+        .map((a) => {
+          const id = escapeHtml(String(a.id ?? ""));
+          const title = escapeHtml(a.title_en || a.title || "(no title)");
+          const src = escapeHtml(String(a.source || ""));
+          const sym = escapeHtml(String(a.matched_company_label || a.matched_symbol || ""));
+          const sum = escapeHtml(String(a.executive_summary_en || "").slice(0, 500));
+          const url = (a.url && String(a.url).startsWith("http"))
+            ? ` · <a href="${escapeHtml(a.url)}" target="_blank" rel="noopener">link</a>`
+            : "";
+          return `<article class="cited-article-card">
+            <div class="cited-article-head"><span class="sv-pill">#${id}</span><span class="mono-xs">${src}</span>${url}</div>
+            <h4 class="cited-article-title">${title}</h4>
+            ${sym ? `<div class="muted mono-sm">${sym}</div>` : ""}
+            ${sum ? `<p class="cited-article-sum">${sum}</p>` : ""}
+          </article>`;
+        })
+        .join("")}
+    </div>`;
+}
+
 function renderInspect(data) {
   const root = document.getElementById("sv-inspect");
   const log = data.cycle_log;
   const strip = !!data.strip_full_prompts;
+  const citedBlock = `<h3>Article evidence (cited IDs only)</h3>${citedArticlesHtml(data.cited_articles)}`;
 
   let decHtml = "";
   for (const d of data.decisions || []) {
@@ -321,11 +354,12 @@ function renderInspect(data) {
         : "";
     decHtml += `<tr><td>${escapeHtml(String(d.kind))}</td><td>${escapeHtml(d.company_label || d.symbol || "—")}</td>
       <td>${escapeHtml(String(d.side || "—"))}</td><td>${d.executed ? "yes" : "no"}</td>
-      <td><pre class="rationale-pre tight">${escapeHtml((d.reason_he || "").slice(0, 4000))}</pre>${mj}</td></tr>`;
+      <td>${heRationaleBlock((d.reason_he || "").slice(0, 4000), true)}${mj}</td></tr>`;
   }
 
   if (!log) {
     root.innerHTML = `
+      ${citedBlock}
       <p class="muted">No cycle JSON on disk for <strong>#${data.cycle_id}</strong>.
       Trader may have logging disabled (<code>DEMO_TRADER_CYCLE_LOG_ENABLED=0</code>) or a different <code>DEMO_TRADER_CYCLE_LOG_DIR</code>.</p>
       <h3>SQLite decisions</h3><div class="sv-scroll sv-table-wrap"><table><thead><tr><th>kind</th><th>Issuer</th><th>side</th><th>exec</th><th>payload</th></tr></thead>
@@ -336,15 +370,21 @@ function renderInspect(data) {
   const sections = ((log.prompt && log.prompt.sections) || {});
   let secBlocks = "";
   for (const [name, val] of Object.entries(sections)) {
-    secBlocks += `<details><summary><code>${escapeHtml(name)}</code></summary><pre class="rationale-pre">${escapeHtml(
-      formatPromptSectionBody(val)
-    )}</pre></details>`;
+    const isEnDigest = name === "knowledge_en";
+    const openAttr = isEnDigest ? "" : " open";
+    const sumExtra = isEnDigest
+      ? " — large English digest (optional; use Knowledge tab to browse the corpus)"
+      : "";
+    secBlocks += `<details class="prompt-block"${openAttr}><summary><code>${escapeHtml(name)}</code>${escapeHtml(
+      sumExtra
+    )}</summary><pre class="rationale-pre">${escapeHtml(formatPromptSectionBody(val))}</pre></details>`;
   }
 
   const err = log.model_error ? `<h3>Error</h3><pre class="rationale-pre">${escapeHtml(String(log.model_error))}</pre>` : "";
 
   root.innerHTML = `
     <p><code>${escapeHtml(log._log_filename || "")}</code> · strip-full via API = <strong>${strip ? "yes" : "no"}</strong></p>
+    ${citedBlock}
     <h3>Ingest</h3><pre class="rationale-pre">${escapeHtml(JSON.stringify(log.ingest || {}, null, 2))}</pre>
     <h3>Model response JSON</h3><pre class="rationale-pre">${escapeHtml(JSON.stringify(log.model_response ?? {}, null, 2))}</pre>
     ${err}

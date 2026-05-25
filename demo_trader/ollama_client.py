@@ -216,7 +216,7 @@ Enriched knowledge center (English; full translation + executive summary stored 
     }}
   ],
   "trades": [
-    {{"symbol": "TEVA.TA", "side": "buy", "qty": 10, "reason_he": "..."}}
+    {{"symbol": "TEVA.TA", "side": "buy", "qty": 10, "reason_he": "...", "cited_news_event_ids": []}}
   ]
 }}
 
@@ -227,6 +227,8 @@ Enriched knowledge center (English; full translation + executive summary stored 
   ב-{max_trades} מניות שונות (פיזור), לא "הכל או כלום". מכירות sell רק אם יש סיבה ברורה.
 - סיכון נמוך: עדיף כמה פוזיציות קטנות מאשר hold מלא עם מזומן גבוה
 - לכל trade חובה reason_he בעברית (לא רק "מודל")
+- רק אם ההחלטה מסתמכת במפורש על פריט בסעיף "Enriched knowledge": הוסף "cited_news_event_ids": [מזהים מספריים של מאמרים ממאגר knowledge_events במספר]. אחרת הרשימה הריקה [] או השמט את השדה.
+- אל תכלול תווים שאינם עברית/ספרות/פיסוק ב-reason_he (בלי תווים לטיניים או זרים מאמצעי תרגום).
 - side רק buy או sell; qty חיובי (מניות שלמות, לא חלקי מניה)
 """
     return system, user

@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 
 from demo_trader.benchmark import compute_performance
 from demo_trader.config import Config
@@ -12,6 +13,113 @@ from demo_trader.db import connect_readonly
 from demo_trader.market_data import fetch_last_prices, price_to_ils, prices_map
 from demo_trader.state_store import load_state
 from demo_trader.tase_calendar import is_tase_regular_trading_hours
+
+
+# Model may echo Greek/Cyrillic glyphs from degraded generations; strip for readable Hebrew rationales.
+_GREEK_CYRILLIC_RE = re.compile(r"[\u0370-\u03FF\u0400-\u052F]")
+_CITED_NEWS_KEYS = frozenset(
+    {"cited_news_event_ids", "evidence_news_ids", "based_on_news_event_ids"}
+)
+
+
+def sanitize_hebrew_rationale(text: str) -> str:
+    """Normalize LLM-produced Hebrew rationales: remove stray scripts, tidy spaces."""
+    if not text:
+        return ""
+    s = _GREEK_CYRILLIC_RE.sub("", text)
+    lines: list[str] = []
+    for line in s.split("\n"):
+        lines.append(re.sub(r"[ \t]+", " ", line).strip())
+    out = "\n".join(lines)
+    while "\n\n\n" in out:
+        out = out.replace("\n\n\n", "\n\n")
+    return out.strip()
+
+
+def _gather_cited_news_event_ids(obj: Any) -> list[int]:
+    ids: list[int] = []
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            if k in _CITED_NEWS_KEYS and isinstance(v, list):
+                for x in v:
+                    try:
+                        n = int(x)
+                    except (TypeError, ValueError):
+                        continue
+                    if n > 0:
+                        ids.append(n)
+            else:
+                ids.extend(_gather_cited_news_event_ids(v))
+    elif isinstance(obj, list):
+        for x in obj:
+            ids.extend(_gather_cited_news_event_ids(x))
+    return ids
+
+
+def gather_inspect_cited_news_event_ids(
+    cycle_log_payload: dict[str, Any] | None,
+    decisions: Iterable[dict[str, Any]],
+) -> list[int]:
+    """Union of citation ids from logged model JSON and persisted decision rows."""
+    acc: list[int] = []
+    if cycle_log_payload and isinstance(cycle_log_payload.get("model_response"), dict):
+        acc.extend(_gather_cited_news_event_ids(cycle_log_payload["model_response"]))
+    for row in decisions:
+        mj = row.get("model_json")
+        if mj is None:
+            continue
+        acc.extend(_gather_cited_news_event_ids(mj))
+    seen: set[int] = set()
+    out: list[int] = []
+    for n in acc:
+        if n not in seen:
+            seen.add(n)
+            out.append(n)
+    out.sort()
+    return out
+
+
+def knowledge_event_refs_by_ids(cfg: Config, ids: list[int]) -> list[dict[str, Any]]:
+    """Short rows for inspector / cycle cards keyed by SQLite knowledge_events.id."""
+    uniq = sorted({int(x) for x in ids if isinstance(x, (int, float)) and int(x) > 0})
+    if not uniq:
+        return []
+    conn = connect_readonly(cfg.db_path)
+    try:
+        cmap = _company_map(conn)
+        qmarks = ",".join("?" * len(uniq))
+        cur = conn.execute(
+            f"""
+            SELECT id, source, url,
+                   COALESCE(title,'') AS title,
+                   COALESCE(title_en,'') AS title_en,
+                   COALESCE(matched_symbol,'') AS matched_symbol,
+                   COALESCE(executive_summary_en,'') AS executive_summary_en
+            FROM knowledge_events
+            WHERE id IN ({qmarks})
+            ORDER BY id ASC
+            """,
+            uniq,
+        )
+        out: list[dict[str, Any]] = []
+        for r in cur.fetchall():
+            msym = str(r["matched_symbol"] or "").strip() or None
+            sm = str(r["executive_summary_en"] or "").strip()
+            out.append(
+                {
+                    "id": int(r["id"]),
+                    "source": r["source"],
+                    "url": r["url"],
+                    "title": r["title"],
+                    "title_en": r["title_en"],
+                    "matched_symbol": msym,
+                    "matched_company_label": company_display_label(msym, cmap),
+                    "executive_summary_en": sm[:500] if sm else "",
+                }
+            )
+        return out
+    finally:
+        conn.close()
 
 
 def _parse_ts(ts: str | None) -> datetime | None:
@@ -76,13 +184,13 @@ def company_display_label(sym: str | None, cmap: dict[str, dict[str, str]]) -> s
 def _model_decision_hints(mr: Any) -> tuple[str, dict[str, str]]:
     if not isinstance(mr, dict):
         return "", {}
-    ana = str(mr.get("analysis_he") or "").strip()
+    ana = sanitize_hebrew_rationale(str(mr.get("analysis_he") or "").strip())
     by_sym: dict[str, str] = {}
     for row in mr.get("by_symbol") or []:
         if not isinstance(row, dict):
             continue
         s = str(row.get("symbol") or "").strip()
-        rationale = str(row.get("rationale_he") or "").strip()
+        rationale = sanitize_hebrew_rationale(str(row.get("rationale_he") or "").strip())
         if s and rationale:
             by_sym[s] = rationale
     return ana, by_sym
@@ -94,12 +202,12 @@ def merge_action_reason(
     symbol: str | None,
     by_sym_hints: dict[str, str],
 ) -> str:
-    chunks: list[str] = [(reason_he or "").strip()]
+    chunks: list[str] = [sanitize_hebrew_rationale((reason_he or "").strip())]
     if symbol and symbol in by_sym_hints:
-        hint = by_sym_hints[symbol].strip()
+        hint = sanitize_hebrew_rationale(by_sym_hints[symbol].strip())
         if hint and hint not in (reason_he or ""):
             chunks.append(f"היערכות והנמקה מהמודל לפי {symbol}: {hint}")
-    return "\n\n".join(c for c in chunks if c)
+    return sanitize_hebrew_rationale("\n\n".join(c for c in chunks if c))
 
 
 def _cycle_id_from_log_filename(name: str) -> int:
@@ -304,6 +412,9 @@ def load_cycle_decisions_detail(cfg: Config, cycle_id: int) -> list[dict[str, An
             sym = str(d["symbol"]) if d.get("symbol") else None
             d["company_label"] = company_display_label(sym, cmap)
             d["model_json"] = _parse_model_json_cell(d.get("model_json"))
+            d["reason_he"] = sanitize_hebrew_rationale(str(d.get("reason_he") or ""))
+            ah = str(d.get("analysis_he") or "").strip()
+            d["analysis_he"] = sanitize_hebrew_rationale(ah) if ah else ""
             rows.append(d)
         return rows
     finally:
@@ -485,6 +596,7 @@ def load_cycles(
                     summary_he_full = sa + "\n\n—— מהמסד (SQLite) ——\n" + sb
             else:
                 summary_he_full = sa or sb
+            summary_he_full = sanitize_hebrew_rationale(summary_he_full.strip())
 
             ref = _parse_ts(c["ts"])
             market_open = bool(c["trading_allowed"]) if ref is None else is_tase_regular_trading_hours(ref)

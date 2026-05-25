@@ -8,6 +8,8 @@ from flask import Flask, jsonify, request, send_from_directory
 
 from demo_trader.config import Config
 from demo_trader.dashboard.data import (
+    gather_inspect_cited_news_event_ids,
+    knowledge_event_refs_by_ids,
     load_cycle_decisions_detail,
     load_cycle_log_payload,
     load_cycles,
@@ -99,8 +101,17 @@ def create_app(cfg: Config | None = None) -> Flask:
         strip_full = request.args.get("strip_full_prompts", "1").lower() not in {"0", "false", "no"}
         payload = load_cycle_log_payload(config, cid, strip_full_prompts=strip_full)
         decisions = load_cycle_decisions_detail(config, cid)
+        cite_ids = gather_inspect_cited_news_event_ids(payload or {}, decisions)
+        cited_articles = knowledge_event_refs_by_ids(config, cite_ids)
         return jsonify(
-            {"cycle_id": cid, "cycle_log": payload, "decisions": decisions, "strip_full_prompts": strip_full}
+            {
+                "cycle_id": cid,
+                "cycle_log": payload,
+                "decisions": decisions,
+                "strip_full_prompts": strip_full,
+                "cited_news_event_ids": cite_ids,
+                "cited_articles": cited_articles,
+            }
         )
 
     return app
