@@ -23,6 +23,13 @@ export DEMO_TRADER_KNOWLEDGE_ENRICH_ON_INGEST=1   # translate/summarize new rows
 python -m demo_trader --once
 ```
 
+**Keep cycles running** — pick one:
+
+| Method | Command / notes |
+|--------|-----------------|
+| **`scripts/spin_cycles.sh`** | Runs `--once` in a shell loop (survives transient Yahoo/Ollama failures). `DEMO_TRADER_INTERVAL_MINUTES` sets pause between attempts (min 60s). |
+| **`python -m demo_trader`** (no `--once`) | Built-in `while True` loop. By default **keeps going** after a failed cycle; set `DEMO_TRADER_LOOP_EXIT_ON_NONZERO=1` for old “exit immediately on failure” behaviour. |
+
 Data defaults:
 
 | Path | Purpose |
@@ -59,6 +66,7 @@ Env vars:
 | `DEMO_TRADER_CYCLE_LOG_ENABLED` | `1` | Write cycle JSON files |
 | `DEMO_TRADER_CYCLE_LOG_DIR` | `data/logs/cycles` | Output directory |
 | `DEMO_TRADER_CYCLE_LOG_FULL_PROMPTS` | `0` | If `1`, store full prompt text (large files) |
+| `DEMO_TRADER_LOOP_EXIT_ON_NONZERO` | `0` | If `1`, the built-in scheduler loop (without `--once`) exits when a cycle returns non-zero |
 
 SQLite still holds the authoritative audit: `cycles`, `decisions` (query with `sqlite3 data/trader.db`).
 
