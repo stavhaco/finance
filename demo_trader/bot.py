@@ -255,7 +255,6 @@ def run_cycle(cfg: Config) -> int:
         conn,
         limit=cfg.knowledge_prompt_rows,
         as_of_utc=sim_now if cfg.simulation else None,
-        benchmark_symbol=cfg.benchmark_symbol,
     )
     catalog_digest = knowledge_catalog_digest()
     fundamentals_digest = companies_fundamentals_digest(conn, cfg.watchlist)
