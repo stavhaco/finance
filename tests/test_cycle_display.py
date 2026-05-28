@@ -22,4 +22,11 @@ def test_format_action_display_uses_hint_for_placeholder() -> None:
 
 def test_format_action_display_ids_only() -> None:
     disp = format_action_display("[evidence_news_ids] [2631]", symbol="AZRG.TA", by_sym_hints={})
-    assert disp["display_note"] or disp["display_en"] or "2631" in disp["display_text"]
+    assert "English" in disp["display_note"] or disp["display_en"]
+    assert "2631" in disp["display_note"]
+
+
+def test_format_action_display_rejects_hebrew_only() -> None:
+    disp = format_action_display("מודל", symbol="BEZQ.TA", by_sym_hints={})
+    assert "English" in disp["display_note"]
+    assert "מודל" not in disp["display_text"]

@@ -154,23 +154,15 @@ function renderPortfolio(p) {
 }
 
 function actionReasonHtml(a) {
-  const en = (a.display_en || "").trim();
-  const he = (a.display_he || "").trim();
+  const en = (a.display_en || a.display_text || "").trim();
   const note = (a.display_note || "").trim();
-  const fallback = (a.reason_he || "").trim();
   if (en) {
-    return `<div class="why-en narr-ltr">${nl2brEscaped(en)}</div>${he ? `<div dir="rtl" class="rationale-rtl">${escapeHtml(he)}</div>` : ""}`;
-  }
-  if (he) {
-    return `<div dir="rtl" class="rationale-rtl">${escapeHtml(he)}</div>`;
+    return `<div class="why-en narr-ltr">${nl2brEscaped(en)}</div>`;
   }
   if (note) {
     return `<p class="muted action-note">${escapeHtml(note)}</p>`;
   }
-  if (fallback && !fallback.startsWith("[evidence")) {
-    return `<div class="why-en narr-ltr">${nl2brEscaped(fallback)}</div>`;
-  }
-  return `<p class="muted action-note">No rationale stored for this action.</p>`;
+  return `<p class="muted action-note">No English rationale stored for this action.</p>`;
 }
 
 function citedArticlesBlock(articles) {
@@ -208,12 +200,12 @@ function renderCycles(data) {
       const openLbl = c.market_open ? "Market open" : "Market closed";
       const perf = `Portfolio ${fmtPct(c.portfolio_return_pct)} · TA-35 ${fmtPct(c.benchmark_return_pct)} · α ${fmtPct(c.alpha_pct)}`;
       const benchLbl = c.benchmark_label ? ` · bench: ${escapeHtml(c.benchmark_label)}` : "";
-      const nar = (c.summary_he || "").trim();
+      const nar = (c.summary_en || "").trim();
       const citedBlock = citedArticlesBlock(c.cited_articles);
       const narrBlock =
         nar.length === 0
           ? ""
-          : `<details class="cycle-narr digest-he"><summary>Model summary (Hebrew)</summary><div dir="rtl" class="rationale-rtl narr-block">${escapeHtml(
+          : `<details class="cycle-narr"><summary>Model summary</summary><div class="why-en narr-block narr-ltr">${nl2brEscaped(
               nar
             )}</div></details>`;
       const actions = (c.actions || [])

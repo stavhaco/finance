@@ -74,26 +74,75 @@ def company_display_label(sym: str | None, cmap: dict[str, dict[str, str]]) -> s
     return sym
 
 
-def _model_decision_hints(mr: Any) -> tuple[str, dict[str, str]]:
+def company_display_label_en(sym: str | None, cmap: dict[str, dict[str, str]]) -> str | None:
+    """English-only issuer line for dashboard cycles."""
+    if not sym:
+        return None
+    row = cmap.get(sym)
+    if not row:
+        return sym
+    en = row["name_en"].strip()
+    if en:
+        return f"{en} · {sym}"
+    he = row["name_he"].strip()
+    if he:
+        return f"{he} · {sym}"
+    return sym
+
+
+def _looks_english(text: str) -> bool:
+    s = (text or "").strip()
+    if not s:
+        return False
+    return bool(re.search(r"[A-Za-z]{3,}", s))
+
+
+def _model_decision_hints(mr: Any) -> tuple[str, dict[str, str], str]:
+    """Returns (legacy analysis_he, symbol->why_en, cycle summary_en)."""
     if not isinstance(mr, dict):
-        return "", {}
+        return "", {}, ""
     ana = str(mr.get("analysis_he") or "").strip()
     by_sym: dict[str, str] = {}
-    for row in mr.get("recommendations") or []:
-        if not isinstance(row, dict):
-            continue
+    summary_parts: list[str] = []
+
+    def _take(row: dict[str, Any]) -> None:
         s = str(row.get("symbol") or "").strip()
         why = str(row.get("why_en") or "").strip()
-        if s and why:
+        stance = str(row.get("stance") or row.get("side") or "").strip()
+        if s and why and _looks_english(why):
             by_sym[s] = why
-    for row in mr.get("by_symbol") or []:
-        if not isinstance(row, dict):
+            if stance:
+                summary_parts.append(f"{s} ({stance}): {why}")
+            else:
+                summary_parts.append(f"{s}: {why}")
+
+    for row in mr.get("recommendations") or []:
+        if isinstance(row, dict):
+            _take(row)
+    for row in mr.get("trades") or []:
+        if isinstance(row, dict):
+            _take(row)
+
+    summary_en = "\n\n".join(summary_parts).strip()[:4000]
+    return ana, by_sym, summary_en
+
+
+def _by_sym_from_decisions(decisions: list[dict[str, Any]]) -> dict[str, str]:
+    out: dict[str, str] = {}
+    for item in decisions:
+        sym = str(item.get("symbol") or "").strip()
+        if not sym:
             continue
-        s = str(row.get("symbol") or "").strip()
-        rationale = str(row.get("rationale_he") or "").strip()
-        if s and rationale and s not in by_sym:
-            by_sym[s] = rationale
-    return ana, by_sym
+        mj = _parse_model_json_cell(item.get("model_json"))
+        if not isinstance(mj, dict):
+            continue
+        raw = mj.get("raw") if isinstance(mj.get("raw"), dict) else mj
+        if not isinstance(raw, dict):
+            continue
+        why = str(raw.get("why_en") or "").strip()
+        if why and _looks_english(why):
+            out[sym] = why
+    return out
 
 
 def merge_action_reason(
@@ -175,7 +224,7 @@ def knowledge_event_refs_by_ids(conn: sqlite3.Connection, ids: list[int], cmap: 
                 "url": r["url"],
                 "title_en": r["title_en"] or r["title"],
                 "matched_symbol": msym,
-                "matched_company_label": company_display_label(msym, cmap),
+                "matched_company_label": company_display_label_en(msym, cmap),
                 "executive_summary_en": sm[:400],
             }
         )
@@ -188,42 +237,41 @@ def format_action_display(
     symbol: str | None,
     by_sym_hints: dict[str, str],
 ) -> dict[str, str]:
+    """English-only text for portfolio cycle cards."""
     parsed = _parse_stored_audit_reason(reason_he or "")
     raw = (reason_he or "").strip()
     hint = (by_sym_hints.get(symbol or "") or "").strip() if symbol else ""
 
-    why = parsed["why_en"] or hint
-    quote = parsed["quote"]
-    legacy = parsed["legacy"]
+    why = parsed["why_en"] if _looks_english(parsed["why_en"]) else ""
+    if not why and _looks_english(hint):
+        why = hint
+    quote = parsed["quote"] if _looks_english(parsed["quote"]) else ""
 
     en_parts: list[str] = []
     if why:
         en_parts.append(why)
     if quote and quote not in why:
         en_parts.append(f'"{quote}"')
+
+    if not en_parts and _looks_english(raw) and not raw.startswith("["):
+        en_parts.append(raw)
+
     display_en = "\n".join(en_parts).strip()
 
-    display_he = ""
-    if legacy and legacy not in _PLACEHOLDER_REASONS and legacy not in display_en:
-        display_he = legacy
-
-    if not display_en and raw and not raw.startswith("["):
-        if re.search(r"[A-Za-z]", raw):
-            display_en = raw
-        elif raw not in _PLACEHOLDER_REASONS:
-            display_he = raw
-
     note = ""
-    if not display_en and not display_he:
-        if raw.startswith("[evidence_news_ids]"):
-            note = "No written rationale — only news IDs were recorded."
-        elif raw in _PLACEHOLDER_REASONS or not raw:
-            note = "Model did not return a detailed rationale for this action."
+    if not display_en:
+        if parsed["news_ids"]:
+            note = f"No English rationale stored (news refs #{', '.join(str(i) for i in parsed['news_ids'])})."
+        elif raw.startswith("[evidence_news_ids]"):
+            note = "No English rationale — only news IDs were recorded."
+        elif raw in _PLACEHOLDER_REASONS or re.search(r"^[\u0590-\u05FF\s]+$", raw):
+            note = "Model did not return an English rationale for this action."
+        elif not _looks_english(raw):
+            note = "No English rationale stored for this action."
 
-    display_text = display_en or display_he or note or raw
+    display_text = display_en or note or "No English rationale stored for this action."
     return {
         "display_en": display_en,
-        "display_he": _tighten_spaced_hebrew(display_he) if display_he else "",
         "display_note": note,
         "display_text": display_text[:1200],
     }
@@ -690,7 +738,7 @@ def load_cycles(
             cid = int(c["id"])
             dcur = conn.execute(
                 """
-                SELECT id, ts, kind, symbol, side, qty, executed, reason_he, analysis_he, broker_message
+                SELECT id, ts, kind, symbol, side, qty, executed, reason_he, analysis_he, broker_message, model_json
                 FROM decisions
                 WHERE cycle_id=?
                 ORDER BY id ASC
@@ -702,6 +750,7 @@ def load_cycles(
             blocked: list[dict[str, Any]] = []
             summary_from_db = ""
             for item in decisions:
+                item["model_json"] = _parse_model_json_cell(item.get("model_json"))
                 kind = str(item.get("kind") or "")
                 if kind == "llm_summary" and item.get("analysis_he"):
                     summary_from_db = str(item["analysis_he"]).strip()
@@ -713,19 +762,22 @@ def load_cycles(
             log_path = _cycle_log_path(log_dir, cid, c["ts"])
             model_analysis = ""
             by_sym_hints: dict[str, str] = {}
-            english_digest = ""
+            summary_en = ""
             payload_for_digest: dict[str, Any] = {}
             if log_path and log_path.is_file():
                 try:
                     payload_for_digest = json.loads(log_path.read_text(encoding="utf-8"))
-                    model_analysis, by_sym_hints = _model_decision_hints(payload_for_digest.get("model_response"))
-                    if isinstance(payload_for_digest, dict):
-                        english_digest = _english_digest_from_cycle_payload(payload_for_digest)
+                    model_analysis, by_sym_hints, summary_en = _model_decision_hints(
+                        payload_for_digest.get("model_response")
+                    )
                 except Exception:
                     payload_for_digest = {}
 
+            by_sym_hints = {**by_sym_hints, **_by_sym_from_decisions(decisions)}
+
             sa = model_analysis.strip()
             sb = summary_from_db.strip()
+            summary_he_full = ""
             if sa and sb:
                 if sa == sb or sb in sa:
                     summary_he_full = sa
@@ -735,10 +787,12 @@ def load_cycles(
                     summary_he_full = sa + "\n\n—— מהמסד (SQLite) ——\n" + sb
             else:
                 summary_he_full = sa or sb
-
             summary_he_full = _tighten_spaced_hebrew(summary_he_full)
             if len(summary_he_full) < 20:
                 summary_he_full = ""
+
+            if not summary_en and _looks_english(summary_he_full):
+                summary_en = summary_he_full
 
             cited_ids = _gather_evidence_news_ids(payload_for_digest.get("model_response"))
             for item in decisions:
@@ -759,14 +813,13 @@ def load_cycles(
                     {
                         "type": "trade",
                         "symbol": sym_t,
-                        "company_label": company_display_label(sym_t, cmap),
+                        "company_label": company_display_label_en(sym_t, cmap),
                         "side": t.get("side"),
                         "qty": t.get("qty"),
                         "executed": True,
-                        "reason_he": disp["display_text"],
                         "display_en": disp["display_en"],
-                        "display_he": disp["display_he"],
                         "display_note": disp["display_note"],
+                        "display_text": disp["display_text"],
                     }
                 )
             for b in blocked[:12]:
@@ -774,26 +827,40 @@ def load_cycles(
                 disp = format_action_display(str(b.get("reason_he") or ""), symbol=sym_b, by_sym_hints=by_sym_hints)
                 broker = str(b.get("broker_message") or "").strip()
                 note = disp["display_note"]
-                if broker and broker not in {"not_in_watchlist", "outside_tase_window"}:
-                    note = f"{note} ({broker})".strip() if note else broker
-                elif broker == "outside_tase_window":
+                if broker == "outside_tase_window":
                     note = "Outside TASE trading hours — not executed."
+                elif broker == "invalid side":
+                    note = "Invalid side from model (only buy/sell execute)."
+                elif broker == "position limit or zero room":
+                    note = "Not executed — position size or cash limit."
+                elif broker == "not_in_watchlist":
+                    note = "Symbol not in watchlist."
+                elif broker and not note:
+                    note = broker
                 actions.append(
                     {
                         "type": "blocked" if b.get("kind") == "blocked_after_hours" else "skip",
                         "symbol": sym_b,
-                        "company_label": company_display_label(sym_b, cmap),
+                        "company_label": company_display_label_en(sym_b, cmap),
                         "side": b.get("side"),
                         "qty": b.get("qty"),
                         "executed": False,
-                        "reason_he": disp["display_text"],
                         "display_en": disp["display_en"],
-                        "display_he": disp["display_he"],
                         "display_note": note or disp["display_note"],
+                        "display_text": disp["display_text"],
                     }
                 )
-            if not actions and summary_he_full:
-                actions.append({"type": "hold", "symbol": None, "company_label": None, "reason_he": summary_he_full})
+            if not actions and summary_en:
+                actions.append(
+                    {
+                        "type": "hold",
+                        "symbol": None,
+                        "company_label": None,
+                        "display_text": summary_en,
+                        "display_en": summary_en,
+                        "display_note": "",
+                    }
+                )
 
             nav_raw = c["nav_ils"]
             bm_px = c["benchmark_px"]
@@ -809,10 +876,10 @@ def load_cycles(
                     "alpha_pct": _round2_maybe(c["alpha_pct"]),
                     "benchmark_px": round(float(bm_px), 2) if bm_px is not None else None,
                     "benchmark_symbol": str(c["benchmark_symbol"] or ""),
-                    "benchmark_label": company_display_label(str(c["benchmark_symbol"] or ""), cmap),
+                    "benchmark_label": company_display_label_en(str(c["benchmark_symbol"] or ""), cmap),
                     "headline_count": c["headline_count"],
                     "executed_trades": len(trades),
-                    "summary_he": summary_he_full,
+                    "summary_en": summary_en,
                     "cited_articles": cited_articles,
                     "actions": actions,
                     "cycle_log": str(log_path) if log_path else None,
