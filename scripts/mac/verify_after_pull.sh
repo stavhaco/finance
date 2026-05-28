@@ -13,4 +13,12 @@ if [[ -d "$REPO_ROOT/.git" ]]; then
 fi
 chmod +x "$REPO_ROOT/scripts/smoke_cycle.sh"
 "$REPO_ROOT/scripts/smoke_cycle.sh"
-echo "smoke_cycle OK — safe to kick launchd: launchctl kickstart -k gui/\$(id -u)/com.finance.demo-trader"
+echo ""
+echo "smoke_cycle OK."
+echo ""
+"$SCRIPT_DIR/paths.sh" 2>/dev/null || true
+echo ""
+echo "If launchd is installed, kick it:"
+echo "  launchctl kickstart -k gui/\$(id -u)/com.finance.demo-trader"
+echo "Tail logs (always from repo root):"
+echo "  tail -f $REPO_ROOT/data/logs/demo-trader.stdout.log"

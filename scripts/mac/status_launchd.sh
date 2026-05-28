@@ -22,3 +22,20 @@ else
   echo "  → run: ./scripts/mac/install_launchd.sh"
   exit 1
 fi
+
+# Resolve repo from plist WorkingDirectory when possible
+REPO=""
+if [[ -f "$PLIST" ]]; then
+  REPO="$(/usr/bin/plutil -extract WorkingDirectory raw -o - "$PLIST" 2>/dev/null || true)"
+fi
+if [[ -n "$REPO" ]]; then
+  echo ""
+  echo "WorkingDirectory (from plist): $REPO"
+  for f in "$REPO/data/logs/demo-trader.stdout.log" "$REPO/data/logs/demo-trader.stderr.log"; do
+    if [[ -f "$f" ]]; then
+      echo "  log: $f ($(wc -c <"$f" | tr -d ' ') bytes)"
+    else
+      echo "  log missing (agent may not have run yet): $f"
+    fi
+  done
+fi
