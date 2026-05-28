@@ -13,6 +13,20 @@ def _utc_iso() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 
 
+def _markdown_cell(value: Any, *, max_len: int = 200) -> str:
+    """One-line markdown table cell: escape pipes, collapse whitespace, cap length."""
+    s = "" if value is None else str(value)
+    for ch in ("\r\n", "\r", "\n", "\t"):
+        s = s.replace(ch, " ")
+    s = s.replace("|", "\\|")
+    while "  " in s:
+        s = s.replace("  ", " ")
+    s = s.strip()
+    if len(s) > max_len:
+        s = s[: max_len - 3].rstrip() + "..."
+    return s if s else "—"
+
+
 def _configure_connection(conn: sqlite3.Connection) -> None:
     conn.execute("PRAGMA foreign_keys = ON;")
     conn.execute("PRAGMA journal_mode = WAL;")
