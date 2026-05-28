@@ -125,21 +125,34 @@ def _filter_headlines_for_sim(headlines: list, sim_now: datetime) -> list:
 
 
 def _trade_audit_reason(raw: dict[str, Any]) -> str:
-    """Audit text from English evidence fields (preferred) or legacy Hebrew reason_he."""
+    """Human-readable audit line for SQLite (English why preferred)."""
     why = str(raw.get("why_en") or "").strip()
-    ids = raw.get("evidence_news_ids")
     quote = str(raw.get("evidence_quote") or "").strip()
     legacy = str(raw.get("reason_he") or raw.get("reason") or "").strip()
+    ids = raw.get("evidence_news_ids")
+    id_nums: list[int] = []
+    if isinstance(ids, list):
+        for x in ids:
+            try:
+                n = int(x)
+            except (TypeError, ValueError):
+                continue
+            if n > 0:
+                id_nums.append(n)
+
     parts: list[str] = []
     if why:
-        parts.append(f"[why_en] {why}")
-    if ids not in (None, [], ()):
-        parts.append(f"[evidence_news_ids] {ids}")
-    if quote:
-        parts.append(f"[evidence_quote] {quote}")
-    if parts:
+        parts.append(why)
+        if quote and quote not in why:
+            parts.append(f'"{quote}"')
+        if id_nums:
+            parts.append(f"(news #{', #'.join(str(i) for i in id_nums)})")
         return "\n".join(parts)[:900]
-    return legacy[:900] if legacy else "מודל"
+    if legacy and legacy not in {"מודל", "model", "Model"}:
+        return legacy[:900]
+    if id_nums:
+        return f"Trade rationale not provided (news #{', #'.join(str(i) for i in id_nums)})"[:900]
+    return legacy[:900] if legacy else "Model returned no rationale"
 
 
 

@@ -102,18 +102,135 @@ def merge_action_reason(
     symbol: str | None,
     by_sym_hints: dict[str, str],
 ) -> str:
-    chunks: list[str] = [(reason_he or "").strip()]
-    if symbol and symbol in by_sym_hints:
-        hint = by_sym_hints[symbol].strip()
-        if hint and hint not in (reason_he or ""):
-            chunks.append(f"היערכות והנמקה מהמודל לפי {symbol}: {hint}")
-    return "\n\n".join(c for c in chunks if c)
+    """Legacy merge — prefer format_action_display() for dashboard."""
+    return format_action_display(reason_he, symbol=symbol, by_sym_hints=by_sym_hints)["display_text"]
 
 
+_PLACEHOLDER_REASONS = frozenset({"מודל", "model", "Model", ""})
+_CITED_ID_KEYS = frozenset({"evidence_news_ids", "cited_news_event_ids"})
+
+
+def _parse_stored_audit_reason(text: str) -> dict[str, Any]:
+    why = ""
+    quote = ""
+    ids: list[int] = []
+    legacy_lines: list[str] = []
+    for line in (text or "").split("\n"):
+        s = line.strip()
+        if s.startswith("[why_en]"):
+            why = s[8:].strip()
+        elif s.startswith("[evidence_news_ids]"):
+            for m in re.findall(r"\d+", s):
+                ids.append(int(m))
+        elif s.startswith("[evidence_quote]"):
+            quote = s[16:].strip()
+        elif s and not s.startswith("["):
+            legacy_lines.append(s)
+    legacy = "\n".join(legacy_lines).strip()
+    return {"why_en": why, "quote": quote, "news_ids": ids, "legacy": legacy}
+
+
+def _gather_evidence_news_ids(obj: Any) -> list[int]:
+    found: list[int] = []
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            if k in _CITED_ID_KEYS and isinstance(v, list):
+                for x in v:
+                    try:
+                        n = int(x)
+                    except (TypeError, ValueError):
+                        continue
+                    if n > 0:
+                        found.append(n)
+            else:
+                found.extend(_gather_evidence_news_ids(v))
+    elif isinstance(obj, list):
+        for x in obj:
+            found.extend(_gather_evidence_news_ids(x))
+    return found
+
+
+def knowledge_event_refs_by_ids(conn: sqlite3.Connection, ids: list[int], cmap: dict[str, dict[str, str]]) -> list[dict[str, Any]]:
+    uniq = sorted({int(x) for x in ids if int(x) > 0})
+    if not uniq:
+        return []
+    qmarks = ",".join("?" * len(uniq))
+    cur = conn.execute(
+        f"""
+        SELECT id, source, url, COALESCE(title_en,'') AS title_en, COALESCE(title,'') AS title,
+               COALESCE(matched_symbol,'') AS matched_symbol,
+               COALESCE(executive_summary_en,'') AS executive_summary_en
+        FROM knowledge_events WHERE id IN ({qmarks}) ORDER BY id ASC
+        """,
+        uniq,
+    )
+    out: list[dict[str, Any]] = []
+    for r in cur.fetchall():
+        msym = str(r["matched_symbol"] or "").strip() or None
+        sm = str(r["executive_summary_en"] or "").strip()
+        out.append(
+            {
+                "id": int(r["id"]),
+                "source": r["source"],
+                "url": r["url"],
+                "title_en": r["title_en"] or r["title"],
+                "matched_symbol": msym,
+                "matched_company_label": company_display_label(msym, cmap),
+                "executive_summary_en": sm[:400],
+            }
+        )
+    return out
+
+
+def format_action_display(
+    reason_he: str,
+    *,
+    symbol: str | None,
+    by_sym_hints: dict[str, str],
+) -> dict[str, str]:
+    parsed = _parse_stored_audit_reason(reason_he or "")
+    raw = (reason_he or "").strip()
+    hint = (by_sym_hints.get(symbol or "") or "").strip() if symbol else ""
+
+    why = parsed["why_en"] or hint
+    quote = parsed["quote"]
+    legacy = parsed["legacy"]
+
+    en_parts: list[str] = []
+    if why:
+        en_parts.append(why)
+    if quote and quote not in why:
+        en_parts.append(f'"{quote}"')
+    display_en = "\n".join(en_parts).strip()
+
+    display_he = ""
+    if legacy and legacy not in _PLACEHOLDER_REASONS and legacy not in display_en:
+        display_he = legacy
+
+    if not display_en and raw and not raw.startswith("["):
+        if re.search(r"[A-Za-z]", raw):
+            display_en = raw
+        elif raw not in _PLACEHOLDER_REASONS:
+            display_he = raw
+
+    note = ""
+    if not display_en and not display_he:
+        if raw.startswith("[evidence_news_ids]"):
+            note = "No written rationale — only news IDs were recorded."
+        elif raw in _PLACEHOLDER_REASONS or not raw:
+            note = "Model did not return a detailed rationale for this action."
+
+    display_text = display_en or display_he or note or raw
+    return {
+        "display_en": display_en,
+        "display_he": _tighten_spaced_hebrew(display_he) if display_he else "",
+        "display_note": note,
+        "display_text": display_text[:1200],
+    }
 
 
 _HE = "\u0590-\u05FF"
-_SPACE_BETWEEN_HE = re.compile(rf"(?<=[{_HE}])\s+(?=[{_HE}])")
+_SPACE_BETWEEN_HE = re.compile(rf"(?<=[{_HE}])[ \t]+(?=[{_HE}])")
 
 
 def _tighten_spaced_hebrew(text: str) -> str:
@@ -573,7 +690,7 @@ def load_cycles(
             cid = int(c["id"])
             dcur = conn.execute(
                 """
-                SELECT id, ts, kind, symbol, side, qty, executed, reason_he, analysis_he
+                SELECT id, ts, kind, symbol, side, qty, executed, reason_he, analysis_he, broker_message
                 FROM decisions
                 WHERE cycle_id=?
                 ORDER BY id ASC
@@ -620,6 +737,16 @@ def load_cycles(
                 summary_he_full = sa or sb
 
             summary_he_full = _tighten_spaced_hebrew(summary_he_full)
+            if len(summary_he_full) < 20:
+                summary_he_full = ""
+
+            cited_ids = _gather_evidence_news_ids(payload_for_digest.get("model_response"))
+            for item in decisions:
+                mj = item.get("model_json")
+                if isinstance(mj, dict):
+                    cited_ids.extend(_gather_evidence_news_ids(mj))
+            cited_ids = sorted({int(x) for x in cited_ids if int(x) > 0})
+            cited_articles = knowledge_event_refs_by_ids(conn, cited_ids, cmap)
 
             ref = _parse_ts(c["ts"])
             market_open = bool(c["trading_allowed"]) if ref is None else is_tase_regular_trading_hours(ref)
@@ -627,7 +754,7 @@ def load_cycles(
             actions = []
             for t in trades:
                 sym_t = str(t.get("symbol") or "") or None
-                reason_he = _tighten_spaced_hebrew(merge_action_reason(str(t.get("reason_he") or ""), symbol=sym_t, by_sym_hints=by_sym_hints))
+                disp = format_action_display(str(t.get("reason_he") or ""), symbol=sym_t, by_sym_hints=by_sym_hints)
                 actions.append(
                     {
                         "type": "trade",
@@ -636,12 +763,21 @@ def load_cycles(
                         "side": t.get("side"),
                         "qty": t.get("qty"),
                         "executed": True,
-                        "reason_he": reason_he,
+                        "reason_he": disp["display_text"],
+                        "display_en": disp["display_en"],
+                        "display_he": disp["display_he"],
+                        "display_note": disp["display_note"],
                     }
                 )
             for b in blocked[:12]:
                 sym_b = str(b.get("symbol") or "") or None
-                reason_b = _tighten_spaced_hebrew(merge_action_reason(str(b.get("reason_he") or ""), symbol=sym_b, by_sym_hints=by_sym_hints))
+                disp = format_action_display(str(b.get("reason_he") or ""), symbol=sym_b, by_sym_hints=by_sym_hints)
+                broker = str(b.get("broker_message") or "").strip()
+                note = disp["display_note"]
+                if broker and broker not in {"not_in_watchlist", "outside_tase_window"}:
+                    note = f"{note} ({broker})".strip() if note else broker
+                elif broker == "outside_tase_window":
+                    note = "Outside TASE trading hours — not executed."
                 actions.append(
                     {
                         "type": "blocked" if b.get("kind") == "blocked_after_hours" else "skip",
@@ -650,7 +786,10 @@ def load_cycles(
                         "side": b.get("side"),
                         "qty": b.get("qty"),
                         "executed": False,
-                        "reason_he": reason_b,
+                        "reason_he": disp["display_text"],
+                        "display_en": disp["display_en"],
+                        "display_he": disp["display_he"],
+                        "display_note": note or disp["display_note"],
                     }
                 )
             if not actions and summary_he_full:
@@ -674,7 +813,7 @@ def load_cycles(
                     "headline_count": c["headline_count"],
                     "executed_trades": len(trades),
                     "summary_he": summary_he_full,
-                    "english_digest": english_digest[:4000] if english_digest else "",
+                    "cited_articles": cited_articles,
                     "actions": actions,
                     "cycle_log": str(log_path) if log_path else None,
                 }

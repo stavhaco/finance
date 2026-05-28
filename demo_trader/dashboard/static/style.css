@@ -304,4 +304,35 @@ button.sv-linkish {
   white-space: pre-wrap;
   unicode-bidi: plaintext;
 }
+.why-en {
+  margin-top: 0.35rem;
+  padding: 0.5rem 0.65rem;
+  border-radius: 6px;
+  background: #0f1520;
+  border: 1px solid var(--border);
+  font-size: 0.84rem;
+  line-height: 1.5;
+}
+.action-note {
+  margin: 0.35rem 0 0;
+  font-size: 0.82rem;
+}
+.cited-wrap {
+  margin: 0.35rem 0 0.65rem;
+}
+.cited-articles-grid {
+  display: grid;
+  gap: 0.5rem;
+  margin-top: 0.4rem;
+}
+.cited-article-card {
+  background: #141c2a;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.55rem 0.65rem;
+  font-size: 0.82rem;
+}
+.cited-article-head { font-size: 0.75rem; color: var(--muted); margin-bottom: 0.25rem; }
+.cited-article-title { margin: 0; font-size: 0.88rem; font-weight: 600; }
+.cited-article-sum { margin: 0.3rem 0 0; font-size: 0.8rem; line-height: 1.45; }
 .small { font-size: 0.8rem; }

@@ -153,6 +153,48 @@ function renderPortfolio(p) {
   renderAllocationBars(p.nav_ils, p.allocation || []);
 }
 
+function actionReasonHtml(a) {
+  const en = (a.display_en || "").trim();
+  const he = (a.display_he || "").trim();
+  const note = (a.display_note || "").trim();
+  const fallback = (a.reason_he || "").trim();
+  if (en) {
+    return `<div class="why-en narr-ltr">${nl2brEscaped(en)}</div>${he ? `<div dir="rtl" class="rationale-rtl">${escapeHtml(he)}</div>` : ""}`;
+  }
+  if (he) {
+    return `<div dir="rtl" class="rationale-rtl">${escapeHtml(he)}</div>`;
+  }
+  if (note) {
+    return `<p class="muted action-note">${escapeHtml(note)}</p>`;
+  }
+  if (fallback && !fallback.startsWith("[evidence")) {
+    return `<div class="why-en narr-ltr">${nl2brEscaped(fallback)}</div>`;
+  }
+  return `<p class="muted action-note">No rationale stored for this action.</p>`;
+}
+
+function citedArticlesBlock(articles) {
+  const rows = Array.isArray(articles) ? articles : [];
+  if (!rows.length) return "";
+  return `<details class="cited-wrap"><summary>News cited this cycle (${rows.length})</summary><div class="cited-articles-grid">${rows
+    .map((art) => {
+      const title = escapeHtml(art.title_en || "(no title)");
+      const src = escapeHtml(String(art.source || ""));
+      const sym = escapeHtml(String(art.matched_company_label || art.matched_symbol || ""));
+      const sum = escapeHtml(String(art.executive_summary_en || "").slice(0, 280));
+      const url =
+        art.url && String(art.url).startsWith("http")
+          ? ` · <a href="${escapeHtml(art.url)}" target="_blank" rel="noopener">source</a>`
+          : "";
+      return `<article class="cited-article-card"><div class="cited-article-head"><span class="sv-pill">#${escapeHtml(
+        String(art.id)
+      )}</span> ${src}${url}</div><h4 class="cited-article-title">${title}</h4>${sym ? `<div class="muted mono-sm">${sym}</div>` : ""}${
+        sum ? `<p class="cited-article-sum">${sum}</p>` : ""
+      }</article>`;
+    })
+    .join("")}</div></details>`;
+}
+
 function renderCycles(data) {
   const root = document.getElementById("cycles-list");
   const cycles = data.cycles || [];
@@ -167,26 +209,16 @@ function renderCycles(data) {
       const perf = `Portfolio ${fmtPct(c.portfolio_return_pct)} · TA-35 ${fmtPct(c.benchmark_return_pct)} · α ${fmtPct(c.alpha_pct)}`;
       const benchLbl = c.benchmark_label ? ` · bench: ${escapeHtml(c.benchmark_label)}` : "";
       const nar = (c.summary_he || "").trim();
-      const english = (c.english_digest || "").trim();
-      const digestBlock =
-        english.length === 0
-          ? `<p class="muted digest-miss small">No English article digest (<code>knowledge_en</code>) stored in this cycle JSON.</p>`
-          : `<details class="digest-en" open><summary>English article context (${english.length.toLocaleString()} chars)</summary><div class="narr-block narr-ltr">${nl2brEscaped(
-              english
-            )}</div></details>`;
+      const citedBlock = citedArticlesBlock(c.cited_articles);
       const narrBlock =
         nar.length === 0
           ? ""
-          : `<details class="cycle-narr digest-he"><summary>Hebrew model summary — RTL (${nar.length.toLocaleString()} chars)</summary><div dir="rtl" class="rationale-rtl narr-block">${escapeHtml(
+          : `<details class="cycle-narr digest-he"><summary>Model summary (Hebrew)</summary><div dir="rtl" class="rationale-rtl narr-block">${escapeHtml(
               nar
             )}</div></details>`;
       const actions = (c.actions || [])
         .map((a) => {
-          const rl = escapeHtml((a.reason_he || "").trim());
-          const rlBlock =
-            rl.length === 0
-              ? `<p class="muted">No rationale text stored for this row.</p>`
-              : `<pre class="rationale-pre tight">${rl}</pre>`;
+          const rlBlock = actionReasonHtml(a);
           const who = escapeHtml(a.company_label || a.symbol || "");
           if (a.type === "trade") {
             const side = (a.side || "").toLowerCase();
@@ -211,7 +243,7 @@ function renderCycles(data) {
             <span class="badge">${c.executed_trades} executed trades</span>
             <span class="muted">${perf}${benchLbl}</span>
           </div>
-          ${digestBlock}
+          ${citedBlock}
           ${narrBlock}
           ${actions || "<p class='muted'>Nothing recorded this cycle.</p>"}
         </article>`;
