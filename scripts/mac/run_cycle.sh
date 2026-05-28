@@ -13,14 +13,18 @@ cd "$REPO_ROOT"
 
 mkdir -p data/logs
 
-if [[ -n "${PYTHON_BIN:-}" ]]; then
-  PY="$PYTHON_BIN"
-elif [[ -x "$REPO_ROOT/.venv/bin/python" ]]; then
+if [[ -x "$REPO_ROOT/.venv/bin/python" ]]; then
   PY="$REPO_ROOT/.venv/bin/python"
+elif [[ -n "${PYTHON_BIN:-}" ]]; then
+  PY="$PYTHON_BIN"
 else
-  PY="python3"
+  echo "ERROR: $REPO_ROOT/.venv/bin/python not found." >&2
+  echo "  cd $REPO_ROOT && python3 -m venv .venv && .venv/bin/pip install -r requirements.txt" >&2
+  exit 1
 fi
 
 export PYTHONPATH="$REPO_ROOT${PYTHONPATH:+:$PYTHONPATH}"
+
+echo "run_cycle: python=$PY ($("$PY" --version 2>&1))" >&2
 
 exec "$PY" -m demo_trader --once "$@"

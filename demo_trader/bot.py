@@ -197,6 +197,13 @@ def run_cycle(cfg: Config) -> int:
         print(f"ERROR: missing benchmark quote for {cfg.benchmark_symbol}", file=sys.stderr)
         return 2
 
+    if not cfg.dry_run:
+        ok, detail = ollama_reachable(cfg.ollama_base_url)
+        if not ok:
+            print(f"ERROR: Ollama unreachable ({detail}). Skipping ingest/trade for this cycle.", file=sys.stderr)
+            print(format_ollama_help(cfg.ollama_base_url, cfg.ollama_model), file=sys.stderr)
+            return 3
+
     finalize_open_trade_outcomes(
         conn,
         prices=prices,
