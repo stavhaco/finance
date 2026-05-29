@@ -114,6 +114,17 @@ On each **new** RSS/Maya row (when `DEMO_TRADER_KNOWLEDGE_ENRICH_ON_INGEST=1`):
 
 Trading cycles read **`trader_knowledge_digest_en`** (TA-35 names, `high` usefulness, or broad market) — **no re-translation per cycle**.
 
+### Async enrichment (fast cycles)
+
+With `DEMO_TRADER_KNOWLEDGE_ENRICH_ASYNC=1` (default), new RSS/Maya rows are **queued** in SQLite (`enrichment_jobs`) instead of blocking the trading cycle. Run a worker on the same Mac:
+
+```bash
+./scripts/mac/run_enrich_worker.sh --limit 12
+# or continuous: make enrich-loop
+```
+
+Ingest and paper trading still run when Ollama is down; only the **trade** LLM call requires Ollama.
+
 ### Backfill existing rows
 
 ```bash
@@ -129,7 +140,12 @@ python -m demo_trader.backfill_knowledge --force-all --sleep-sec 1
 
 | Variable | Default | Meaning |
 |----------|---------|---------|
-| `DEMO_TRADER_KNOWLEDGE_ENRICH_ON_INGEST` | `1` | LLM enrich each new row at ingest |
+| `DEMO_TRADER_KNOWLEDGE_ENRICH_ON_INGEST` | `1` | Queue or inline enrich each new row |
+| `DEMO_TRADER_KNOWLEDGE_ENRICH_ASYNC` | `1` | Queue enrichment (use `enrich_worker`) |
+| `DEMO_TRADER_PROMPT_SLIM_RECOMMENDATIONS` | `1` | Recommendations for focus symbols only |
+| `DEMO_TRADER_PROMPT_FOCUS_MAX_SYMBOLS` | `18` | Max symbols in slim recommendation list |
+| `DEMO_TRADER_PROMPT_VERSION` | `v2-slim` | Stored on each `cycles` row |
+| `DEMO_TRADER_SKIP_CYCLE_WITHOUT_HIGH_NEWS` | `0` | Skip trade LLM if no high news & flat book |
 | `DEMO_TRADER_KNOWLEDGE_ENRICH_FETCH_BODY` | `1` | Fetch HTML/PDF before LLM |
 | `DEMO_TRADER_OLLAMA_ENRICHMENT_MODEL` | (same as `OLLAMA_MODEL`) | Model for enrichment only |
 | `DEMO_TRADER_KNOWLEDGE_ENRICH_TIMEOUT_SEC` | `300` | Ollama timeout per article |
@@ -193,6 +209,17 @@ With `DEMO_TRADER_ENFORCE_TASE_HOURS=1`, buys/sells run only **Sun–Thu 09:00�
 | `DEMO_TRADER_CYCLE_LOG_DIR` | `data/logs/cycles` |
 | `DEMO_TRADER_CYCLE_LOG_FULL_PROMPTS` | `0` |
 
+## Makefile (local iteration)
+
+```bash
+make test          # unit tests (no Ollama)
+make dry-cycle     # one cycle, stub trades
+make cycle         # launchd-style single cycle
+make dashboard     # http://127.0.0.1:8765/
+make enrich        # drain enrichment queue once
+make enrich-loop   # background enrichment worker
+```
+
 ## Web dashboard
 
 Read-only UI over `data/trader.db`, `data/paper_state.json`, and `data/logs/cycles/`.
@@ -208,6 +235,8 @@ pip install -r requirements.txt
 - Timeframe: 1d / 7d / 30d / 90d / 1y (auto-refresh every 60s).
 
 Uses SQLite **WAL + read-only** connections so the dashboard does not lock the trading loop.
+
+The portfolio tab includes an **ops strip** (Ollama/TASE/enrich queue/alerts), **NAV chart** (`/api/series/nav`), and optional **30s fast refresh**.
 
 ## Tests (no LLM)
 

@@ -399,13 +399,18 @@ def insert_cycle(
     alpha_pct: float | None,
     headline_count: int,
     ts_utc_iso: str | None = None,
+    prompt_version: str | None = None,
+    duration_ms: int | None = None,
+    phase_metrics_json: str | None = None,
+    ingest_json: str | None = None,
 ) -> int:
     cur = conn.execute(
         """
         INSERT INTO cycles(
             ts, trading_allowed, knowledge_only, nav_ils, benchmark_symbol, benchmark_px,
-            portfolio_return_pct, benchmark_return_pct, alpha_pct, headline_count
-        ) VALUES(?,?,?,?,?,?,?,?,?,?)
+            portfolio_return_pct, benchmark_return_pct, alpha_pct, headline_count,
+            prompt_version, duration_ms, phase_metrics_json, ingest_json
+        ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         """,
         (
             ts_utc_iso or _utc_iso(),
@@ -418,10 +423,79 @@ def insert_cycle(
             benchmark_return_pct,
             alpha_pct,
             headline_count,
+            prompt_version,
+            duration_ms,
+            phase_metrics_json,
+            ingest_json,
         ),
     )
     conn.commit()
     return int(cur.lastrowid)
+
+
+def count_recent_high_usefulness_news(
+    conn: sqlite3.Connection,
+    *,
+    hours: int = 24,
+    as_of_utc: datetime | None = None,
+) -> int:
+    """Rows enriched as high usefulness within the lookback window."""
+    if as_of_utc is None:
+        cur = conn.execute(
+            """
+            SELECT COUNT(*) FROM knowledge_events
+            WHERE enrichment_status='ok' AND trade_usefulness='high'
+              AND datetime(COALESCE(event_time, ts)) >= datetime('now', ? || ' hours')
+            """,
+            (f"-{max(1, int(hours))}",),
+        )
+    else:
+        as_iso = as_of_utc.astimezone(timezone.utc).replace(microsecond=0).isoformat()
+        cur = conn.execute(
+            """
+            SELECT COUNT(*) FROM knowledge_events
+            WHERE enrichment_status='ok' AND trade_usefulness='high'
+              AND datetime(COALESCE(event_time, ts)) <= ?
+              AND datetime(COALESCE(event_time, ts)) >= datetime(?, ? || ' hours')
+            """,
+            (as_iso, as_iso, f"-{max(1, int(hours))}"),
+        )
+    return int(cur.fetchone()[0])
+
+
+def load_nav_series(
+    conn: sqlite3.Connection,
+    *,
+    since_iso: str | None = None,
+    limit: int = 500,
+) -> list[dict[str, Any]]:
+    if since_iso:
+        cur = conn.execute(
+            """
+            SELECT id, ts, nav_ils, portfolio_return_pct, benchmark_return_pct, alpha_pct,
+                   knowledge_only, duration_ms
+            FROM cycles
+            WHERE ts >= ?
+            ORDER BY id ASC
+            LIMIT ?
+            """,
+            (since_iso, int(limit)),
+        )
+    else:
+        cur = conn.execute(
+            """
+            SELECT id, ts, nav_ils, portfolio_return_pct, benchmark_return_pct, alpha_pct,
+                   knowledge_only, duration_ms
+            FROM cycles
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            (int(limit),),
+        )
+        rows = list(cur.fetchall())
+        rows.reverse()
+        return [dict(r) for r in rows]
+    return [dict(r) for r in cur.fetchall()]
 
 
 def insert_decision(

@@ -32,6 +32,10 @@ echo "Step 1/2: cycle rationales from data/logs/cycles/*.json"
 "$PY" -m demo_trader.backfill_cycle_rationales "$@"
 echo ""
 echo "Step 2/2: knowledge_events English enrichment (Ollama; set KNOWLEDGE_LIMIT=0 to skip volume cap)"
-"$PY" -m demo_trader.backfill_knowledge "${KNOWLEDGE_ARGS[@]}"
+if ((${#KNOWLEDGE_ARGS[@]})); then
+  "$PY" -m demo_trader.backfill_knowledge "${KNOWLEDGE_ARGS[@]}"
+else
+  "$PY" -m demo_trader.backfill_knowledge
+fi
 echo ""
 echo "Backfill complete. Hard-refresh the dashboard to see updated English text."

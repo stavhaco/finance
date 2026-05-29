@@ -161,6 +161,8 @@ def build_hebrew_trader_prompt(
     max_trades: int,
     max_cash_pct_target: float = 15.0,
     min_buys_when_trading: int = 1,
+    recommendation_symbols: tuple[str, ...] | None = None,
+    prompt_slim: bool = True,
 ) -> tuple[str, str]:
     system = (
         "אתה סוחר ניירות (paper trading) זהיר בשוק הישראלי. "
@@ -173,6 +175,15 @@ def build_hebrew_trader_prompt(
         "כשמותר לסחור: העדף מזומן נמוך — פריסת פוזיציות מתונה על TA-35 (סיכון נמוך)."
     )
     gate = "כן" if trading_allowed else "לא"
+    rec_syms = list(recommendation_symbols) if recommendation_symbols else list(watchlist)
+    slim = bool(prompt_slim and recommendation_symbols)
+    if slim:
+        rec_rule = (
+            f"- recommendations: exactly one item per symbol in this focus list only: {rec_syms} "
+            f"(do not emit recommendations for other watchlist symbols)"
+        )
+    else:
+        rec_rule = f"- recommendations: בדיוק פריט אחד לכל סימבול בסדר הרשימה {list(watchlist)}"
     user = f"""האם כרגע מותר לבצע פעולות מסחר (חלון מסחר פשוט בת\"א)? {gate}
 
 סביבת מניות (רק סימולים אלה מותרים לפעולות קנייה/מכירה):
@@ -227,8 +238,9 @@ Knowledge center (English table; SQLite-enriched TA-35 rows only — cite **news
 }}
 
 חוקים מחייבים:
-- recommendations: בדיוק פריט אחד לכל סימבול בסדר הרשימה {list(watchlist)}
+{rec_rule}
 - stance בכל המלצה חייב להיות במדויק באנגלית האחת מהערכים buy או sell או hold (מחרוזת יחידה, לא רשימת אפשרויות)
+- trades: רק סימבולים מרשימת המסחר המלאה {list(watchlist)}
 - evidence_news_ids: מערך שלמים מהעמודה news_id בטבלה האנגלית בלבד; אם אין התאמה ישירה — מערך ריק []
 - evidence_quote: באנגלית, משפט קצר שמשקף ציטוט מהידיעות שצורפו (יכול להיות ריק רק אם evidence_news_ids ריק)
 - trades: לכל היותר {max_trades} עסקאות ביצוע (buy/sell עם qty חיובי שלם)

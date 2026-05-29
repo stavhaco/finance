@@ -23,12 +23,16 @@ PLIST_DST="$HOME/Library/LaunchAgents/com.finance.demo-trader.plist"
 chmod +x "$RUN_SCRIPT"
 mkdir -p "$REPO_ROOT/data/logs"
 
-# Persist corrected REPO_ROOT if env still has placeholder
-if grep -q 'REPO_ROOT=.*YOU' "$ENV_FILE" 2>/dev/null; then
-  if [[ "$(uname)" == "Darwin" ]]; then
-    sed -i '' "s|^REPO_ROOT=.*|REPO_ROOT=$REPO_ROOT|" "$ENV_FILE"
+# Persist corrected REPO_ROOT if env still has placeholder or unset
+if grep -q 'REPO_ROOT=.*YOU' "$ENV_FILE" 2>/dev/null || ! grep -qE '^REPO_ROOT=/.+' "$ENV_FILE" 2>/dev/null; then
+  if grep -qE '^REPO_ROOT=' "$ENV_FILE" 2>/dev/null; then
+    if [[ "$(uname)" == "Darwin" ]]; then
+      sed -i '' "s|^REPO_ROOT=.*|REPO_ROOT=$REPO_ROOT|" "$ENV_FILE"
+    else
+      sed -i "s|^REPO_ROOT=.*|REPO_ROOT=$REPO_ROOT|" "$ENV_FILE"
+    fi
   else
-    sed -i "s|^REPO_ROOT=.*|REPO_ROOT=$REPO_ROOT|" "$ENV_FILE"
+    echo "REPO_ROOT=$REPO_ROOT" >>"$ENV_FILE"
   fi
   echo "Updated REPO_ROOT in $ENV_FILE"
 fi

@@ -16,6 +16,7 @@ from demo_trader.dashboard.data import (
     load_supervision_overview,
     parse_range_query,
 )
+from demo_trader.dashboard.ops_status import load_nav_series_api, load_ops_status
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 
@@ -90,6 +91,28 @@ def create_app(cfg: Config | None = None) -> Flask:
     def api_supervision_overview():
         limit = int(request.args.get("cycle_log_limit", "100"))
         return jsonify(load_supervision_overview(config, cycle_log_limit=limit))
+
+    @app.get("/api/status")
+    def api_status():
+        return jsonify(load_ops_status(config))
+
+    @app.get("/api/series/nav")
+    def api_series_nav():
+        days = int(request.args.get("days", "30"))
+        return jsonify(load_nav_series_api(config, days=days))
+
+    @app.get("/api/events")
+    def api_events():
+        """Lightweight poll endpoint: last cycle id + alert count (for fast dashboard refresh)."""
+        st = load_ops_status(config)
+        lc = st.get("last_cycle") or {}
+        return jsonify(
+            {
+                "last_cycle_id": lc.get("id"),
+                "alert_count": len(st.get("alerts") or []),
+                "enrich_pending": int((st.get("enrichment_jobs") or {}).get("pending", 0)),
+            }
+        )
 
     @app.get("/api/supervision/cycle-inspect")
     def api_supervision_cycle_inspect():

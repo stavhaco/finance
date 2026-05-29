@@ -14,6 +14,7 @@ from demo_trader.benchmark import compute_performance, ensure_session
 from demo_trader.config import Config
 from demo_trader.db import (
     companies_fundamentals_digest,
+    count_recent_high_usefulness_news,
     trader_knowledge_digest_en,
     finalize_open_trade_outcomes,
     insert_cycle,
@@ -29,7 +30,10 @@ from demo_trader.market_data import fetch_last_prices, prices_map
 from demo_trader.maya_client import maya_digest_for_prompt, normalize_maya_items
 from demo_trader.news_feeds import fetch_headlines, headlines_digest, mock_headlines
 from demo_trader.cycle_log import write_cycle_report
+from demo_trader.cycle_timing import CycleTimer
 from demo_trader.dry_run import dry_run_decision
+from demo_trader.enrichment_jobs import enrichment_job_stats, pending_job_count
+from demo_trader.prompt_focus import prompt_focus_symbols
 from demo_trader.ollama_client import build_hebrew_trader_prompt, chat_json
 from demo_trader.ollama_health import format_ollama_help, ollama_reachable
 from demo_trader.paper_broker import Quote, execute_trade, portfolio_nav
@@ -156,8 +160,50 @@ def _trade_audit_reason(raw: dict[str, Any]) -> str:
 
 
 
+def _ingest_summary_json(
+    *,
+    headlines: int,
+    inserted: int,
+    maya_rows: int,
+    maya_inserted: int,
+    enrich_pending: int,
+) -> str:
+    return json.dumps(
+        {
+            "rss_headlines": headlines,
+            "rss_db_new": inserted,
+            "maya_rows": maya_rows,
+            "maya_db_new": maya_inserted,
+            "enrich_jobs_pending": enrich_pending,
+        },
+        ensure_ascii=False,
+    )
+
+
+def _should_skip_trading_llm(
+    conn,
+    cfg: Config,
+    state,
+    *,
+    sim_now: datetime | None,
+) -> bool:
+    if cfg.dry_run or not cfg.skip_cycle_without_high_news:
+        return False
+    if state.positions:
+        return False
+    n = count_recent_high_usefulness_news(
+        conn,
+        hours=cfg.high_news_lookback_hours,
+        as_of_utc=sim_now if cfg.simulation else None,
+    )
+    return n == 0
+
+
 def run_cycle(cfg: Config) -> int:
+    timer = CycleTimer()
+    timer.start("total")
     conn = open_db(cfg.db_path)
+    timer.start("setup")
     upsert_companies(
         conn,
         ((c.symbol, c.name_he, c.name_en, c.sector_he, c.category_he) for c in TA35_COMPANIES),
@@ -204,18 +250,12 @@ def run_cycle(cfg: Config) -> int:
     else:
         quotes = fetch_last_prices(sorted(symbols))
         prices = prices_map(quotes)
+    timer.stop("setup")
 
     bench_q = quotes.get(cfg.benchmark_symbol)
     if bench_q is None or bench_q.last <= 0:
         print(f"ERROR: missing benchmark quote for {cfg.benchmark_symbol}", file=sys.stderr)
         return 2
-
-    if not cfg.dry_run:
-        ok, detail = ollama_reachable(cfg.ollama_base_url)
-        if not ok:
-            print(f"ERROR: Ollama unreachable ({detail}). Skipping ingest/trade for this cycle.", file=sys.stderr)
-            print(format_ollama_help(cfg.ollama_base_url, cfg.ollama_model), file=sys.stderr)
-            return 3
 
     finalize_open_trade_outcomes(
         conn,
@@ -230,6 +270,7 @@ def run_cycle(cfg: Config) -> int:
         maya_rows = []
         maya_inserted = 0
     else:
+        timer.start("ingest")
         headlines = fetch_headlines(cfg.rss_feeds(), cfg.news_max_headlines)
         if not headlines:
             headlines = mock_headlines()
@@ -247,6 +288,24 @@ def run_cycle(cfg: Config) -> int:
         else:
             maya_rows = []
             maya_inserted = 0
+        timer.stop("ingest")
+        ej = enrichment_job_stats(conn)
+        pending_enrich = int(ej.get("pending", 0)) + int(ej.get("processing", 0))
+        if pending_enrich:
+            print(
+                f"enrichment queue: pending={ej.get('pending', 0)} "
+                f"processing={ej.get('processing', 0)} "
+                f"(run: python -m demo_trader.enrich_worker --limit 8)",
+                flush=True,
+            )
+
+    ingest_json = _ingest_summary_json(
+        headlines=len(headlines),
+        inserted=inserted,
+        maya_rows=len(maya_rows),
+        maya_inserted=maya_inserted,
+        enrich_pending=pending_job_count(conn),
+    )
 
     if cfg.simulation and not cfg.sim_ingest_live:
         maya_digest = (
@@ -311,6 +370,14 @@ def run_cycle(cfg: Config) -> int:
 
     portfolio_text = _portfolio_text(state, prices, cfg)
 
+    rec_syms: tuple[str, ...] = cfg.watchlist
+    if cfg.prompt_slim_recommendations:
+        rec_syms = prompt_focus_symbols(
+            cfg.watchlist,
+            state.positions,
+            max_symbols=cfg.prompt_focus_max_symbols,
+        )
+
     system, user = build_hebrew_trader_prompt(
         watchlist=cfg.watchlist,
         trading_allowed=trading_allowed,
@@ -325,6 +392,8 @@ def run_cycle(cfg: Config) -> int:
         max_trades=cfg.max_trades_per_cycle,
         max_cash_pct_target=cfg.max_cash_pct_target,
         min_buys_when_trading=cfg.min_buys_when_trading,
+        recommendation_symbols=rec_syms if cfg.prompt_slim_recommendations else None,
+        prompt_slim=cfg.prompt_slim_recommendations,
     )
 
     pending: list[dict[str, Any]] = []
@@ -339,18 +408,30 @@ def run_cycle(cfg: Config) -> int:
     }
 
     try:
-        if cfg.dry_run:
+        if _should_skip_trading_llm(conn, cfg, state, sim_now=sim_now):
+            print(
+                "SKIP_LLM: no high-usefulness enriched news in lookback and no positions — knowledge-only cycle.",
+                flush=True,
+            )
+            decision = {
+                "analysis_he": "ללא חדשות בעלות עדיפות גבוהה — דילוג על מודל מסחר.",
+                "recommendations": [],
+                "trades": [],
+            }
+        elif cfg.dry_run:
             print("DRY_RUN: skipping Ollama; using deterministic stub decision.", flush=True)
             decision = dry_run_decision(
                 watchlist=cfg.watchlist,
                 trading_allowed=trading_allowed,
                 max_trades=cfg.max_trades_per_cycle,
                 min_buys_when_trading=cfg.min_buys_when_trading,
+                recommendation_symbols=rec_syms if cfg.prompt_slim_recommendations else None,
             )
         else:
             ok, detail = ollama_reachable(cfg.ollama_base_url)
             if not ok:
                 raise ConnectionError(f"{detail}\n{format_ollama_help(cfg.ollama_base_url, cfg.ollama_model)}")
+            timer.start("ollama_trade")
             decision = chat_json(
                 base_url=cfg.ollama_base_url,
                 model=cfg.ollama_model,
@@ -358,9 +439,11 @@ def run_cycle(cfg: Config) -> int:
                 user=user,
                 timeout_sec=cfg.ollama_timeout_sec,
             )
+            timer.stop("ollama_trade")
     except Exception as e:
         print(f"ERROR: Ollama call failed: {e}", file=sys.stderr)
         traceback.print_exc()
+        timer.stop("total")
         cycle_id = insert_cycle(
             conn,
             trading_allowed=trading_allowed,
@@ -373,6 +456,10 @@ def run_cycle(cfg: Config) -> int:
             alpha_pct=perf_pre.alpha_vs_benchmark_pct,
             headline_count=len(headlines),
             ts_utc_iso=audit_ts,
+            prompt_version=cfg.prompt_version,
+            duration_ms=timer.total_ms,
+            phase_metrics_json=timer.to_json(),
+            ingest_json=ingest_json,
         )
         insert_decision(
             conn,
@@ -608,6 +695,7 @@ def run_cycle(cfg: Config) -> int:
     perf_post = compute_performance(state, prices=prices_end, benchmark_last=float(bench_end.last))
 
     knowledge_only = executed == 0
+    timer.stop("total")
     cycle_id = insert_cycle(
         conn,
         trading_allowed=trading_allowed,
@@ -620,7 +708,12 @@ def run_cycle(cfg: Config) -> int:
         alpha_pct=perf_post.alpha_vs_benchmark_pct,
         headline_count=len(headlines),
         ts_utc_iso=audit_ts,
+        prompt_version=cfg.prompt_version,
+        duration_ms=timer.total_ms,
+        phase_metrics_json=timer.to_json(),
+        ingest_json=ingest_json,
     )
+    print(f"cycle timing ms: {timer.phases_ms} total={timer.total_ms}", flush=True)
 
     for row in pending:
         insert_decision(

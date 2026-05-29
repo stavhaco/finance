@@ -7,6 +7,7 @@ __pycache__/
 venv/
 data/
 scripts/ci/remote-ollama.env
+scripts/mac/demo-trader.env
 *.egg-info/
 dist/
 build/

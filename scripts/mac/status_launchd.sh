@@ -1,41 +1,49 @@
 #!/usr/bin/env bash
-# Check whether the demo-trader LaunchAgent is installed and loaded.
+# Check demo-trader LaunchAgents (cycle + enrich).
 set -euo pipefail
 
-LABEL="com.finance.demo-trader"
 DOMAIN="gui/$(id -u)"
-PLIST="$HOME/Library/LaunchAgents/${LABEL}.plist"
+FAIL=0
 
-echo "Plist file: $PLIST"
-if [[ -f "$PLIST" ]]; then
+_status_one() {
+  local label="$1"
+  local log_stem="$2"
+  local PLIST="$HOME/Library/LaunchAgents/${label}.plist"
+
+  echo "=== $label ==="
+  echo "Plist: $PLIST"
+  if [[ ! -f "$PLIST" ]]; then
+    echo "  exists: no"
+    FAIL=1
+    return
+  fi
   echo "  exists: yes"
-else
-  echo "  exists: no  → run: ./scripts/mac/install_launchd.sh"
-  exit 1
-fi
 
-if launchctl print "${DOMAIN}/${LABEL}" &>/dev/null; then
-  echo "Service: loaded in ${DOMAIN}"
-  launchctl print "${DOMAIN}/${LABEL}" 2>/dev/null | head -20
-else
-  echo "Service: NOT loaded in ${DOMAIN}"
-  echo "  → run: ./scripts/mac/install_launchd.sh"
-  exit 1
-fi
+  if launchctl print "${DOMAIN}/${label}" &>/dev/null; then
+    echo "  loaded: yes"
+    launchctl print "${DOMAIN}/${label}" 2>/dev/null | grep -E 'state =|last exit|runs =|path =' | head -6 || true
+  else
+    echo "  loaded: no"
+    FAIL=1
+  fi
 
-# Resolve repo from plist WorkingDirectory when possible
-REPO=""
-if [[ -f "$PLIST" ]]; then
+  local REPO=""
   REPO="$(/usr/bin/plutil -extract WorkingDirectory raw -o - "$PLIST" 2>/dev/null || true)"
-fi
-if [[ -n "$REPO" ]]; then
+  if [[ -n "$REPO" ]]; then
+    for f in "$REPO/data/logs/${log_stem}.stdout.log" "$REPO/data/logs/${log_stem}.stderr.log"; do
+      if [[ -f "$f" ]]; then
+        echo "  log: $f ($(wc -c <"$f" | tr -d ' ') bytes)"
+      fi
+    done
+  fi
   echo ""
-  echo "WorkingDirectory (from plist): $REPO"
-  for f in "$REPO/data/logs/demo-trader.stdout.log" "$REPO/data/logs/demo-trader.stderr.log"; do
-    if [[ -f "$f" ]]; then
-      echo "  log: $f ($(wc -c <"$f" | tr -d ' ') bytes)"
-    else
-      echo "  log missing (agent may not have run yet): $f"
-    fi
-  done
+}
+
+_status_one "com.finance.demo-trader" "demo-trader"
+_status_one "com.finance.demo-trader-enrich" "demo-trader-enrich"
+
+if [[ "$FAIL" -ne 0 ]]; then
+  echo "Install missing agents:"
+  echo "  ./scripts/mac/install_launchd_all.sh"
+  exit 1
 fi

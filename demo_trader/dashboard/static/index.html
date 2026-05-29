@@ -20,10 +20,13 @@
         </select>
       </label>
       <button id="refresh" type="button">Refresh now</button>
-      <label class="inline-check"><input type="checkbox" id="auto-refresh" /> Auto-refresh every 2 min</label>
+      <label class="inline-check"><input type="checkbox" id="auto-refresh" checked /> Auto-refresh</label>
+      <label class="inline-check"><input type="checkbox" id="fast-refresh" /> Fast (30s)</label>
       <span id="status" class="status"></span>
     </div>
   </header>
+
+  <div id="ops-strip" class="ops-strip" aria-live="polite"></div>
 
   <nav class="tabs" role="tablist">
     <button type="button" class="tab active" role="tab" aria-selected="true" data-tab="portfolio">Portfolio &amp; cycles</button>
@@ -32,6 +35,12 @@
   </nav>
 
   <main id="tab-portfolio" class="panel active" role="tabpanel">
+    <section>
+      <h2>NAV &amp; alpha vs benchmark</h2>
+      <p class="muted">From SQLite <code>cycles</code> — updates with refresh.</p>
+      <canvas id="nav-chart" class="nav-chart" width="900" height="180" role="img" aria-label="NAV time series"></canvas>
+      <p id="nav-chart-legend" class="muted chart-legend"></p>
+    </section>
     <section class="cards" id="summary-cards"></section>
     <div class="grid-2">
       <section>

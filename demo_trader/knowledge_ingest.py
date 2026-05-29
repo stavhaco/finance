@@ -6,6 +6,7 @@ import sqlite3
 
 from demo_trader.config import Config
 from demo_trader.db import insert_knowledge_event
+from demo_trader.enrichment_jobs import enqueue_enrichment_job
 from demo_trader.knowledge_enrichment import enrich_knowledge_event_by_id
 from demo_trader.news_feeds import Headline
 from demo_trader.ta35_catalog import TA35_COMPANIES
@@ -23,6 +24,18 @@ def _norm_he(s: str) -> str:
 def match_company_text(text: str) -> str | None:
     synthetic = Headline(title=_norm_he(text), link="", source="", published=None)
     return match_company(synthetic)
+
+
+def _maybe_enrich_after_insert(conn: sqlite3.Connection, kid: int, *, cfg: Config) -> None:
+    if not cfg.knowledge_enrich_on_ingest:
+        return
+    if cfg.knowledge_enrich_async:
+        enqueue_enrichment_job(conn, kid)
+        return
+    try:
+        enrich_knowledge_event_by_id(conn, kid, cfg)
+    except Exception as e:
+        logger.warning("knowledge enrich failed (id=%s): %s", kid, e)
 
 
 def match_company(headline: Headline) -> str | None:
@@ -56,11 +69,7 @@ def ingest_headlines(conn: sqlite3.Connection, headlines: list[Headline], *, cfg
         if kid is None:
             continue
         inserted += 1
-        if cfg.knowledge_enrich_on_ingest:
-            try:
-                enrich_knowledge_event_by_id(conn, kid, cfg)
-            except Exception as e:
-                logger.warning("knowledge enrich failed (rss id=%s): %s", kid, e)
+        _maybe_enrich_after_insert(conn, kid, cfg=cfg)
     return inserted
 
 
@@ -90,9 +99,5 @@ def ingest_maya_rows(conn: sqlite3.Connection, rows: list, *, cfg: Config) -> in
         if kid is None:
             continue
         inserted += 1
-        if cfg.knowledge_enrich_on_ingest:
-            try:
-                enrich_knowledge_event_by_id(conn, kid, cfg)
-            except Exception as e:
-                logger.warning("knowledge enrich failed (maya id=%s): %s", kid, e)
+        _maybe_enrich_after_insert(conn, kid, cfg=cfg)
     return inserted

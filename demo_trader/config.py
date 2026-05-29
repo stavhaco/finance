@@ -137,6 +137,9 @@ class Config:
     knowledge_enrich_on_ingest: bool = field(
         default_factory=lambda: _env_bool("DEMO_TRADER_KNOWLEDGE_ENRICH_ON_INGEST", True)
     )
+    knowledge_enrich_async: bool = field(
+        default_factory=lambda: _env_bool("DEMO_TRADER_KNOWLEDGE_ENRICH_ASYNC", True)
+    )
     knowledge_enrich_fetch_body: bool = field(
         default_factory=lambda: _env_bool("DEMO_TRADER_KNOWLEDGE_ENRICH_FETCH_BODY", True)
     )
@@ -162,7 +165,22 @@ class Config:
     cycle_log_enabled: bool = field(default_factory=lambda: _env_bool("DEMO_TRADER_CYCLE_LOG_ENABLED", True))
     cycle_log_dir: str = field(default_factory=lambda: _env_str("DEMO_TRADER_CYCLE_LOG_DIR", "data/logs/cycles"))
     cycle_log_full_prompts: bool = field(
-        default_factory=lambda: _env_bool("DEMO_TRADER_CYCLE_LOG_FULL_PROMPTS", True)
+        default_factory=lambda: _env_bool("DEMO_TRADER_CYCLE_LOG_FULL_PROMPTS", False)
+    )
+    prompt_version: str = field(
+        default_factory=lambda: _env_str("DEMO_TRADER_PROMPT_VERSION", "v2-slim")
+    )
+    prompt_slim_recommendations: bool = field(
+        default_factory=lambda: _env_bool("DEMO_TRADER_PROMPT_SLIM_RECOMMENDATIONS", True)
+    )
+    prompt_focus_max_symbols: int = field(
+        default_factory=lambda: max(5, _env_int("DEMO_TRADER_PROMPT_FOCUS_MAX_SYMBOLS", 18))
+    )
+    skip_cycle_without_high_news: bool = field(
+        default_factory=lambda: _env_bool("DEMO_TRADER_SKIP_CYCLE_WITHOUT_HIGH_NEWS", False)
+    )
+    high_news_lookback_hours: int = field(
+        default_factory=lambda: max(1, _env_int("DEMO_TRADER_HIGH_NEWS_LOOKBACK_HOURS", 24))
     )
     dry_run: bool = field(default_factory=lambda: _env_bool("DEMO_TRADER_DRY_RUN", False))
 

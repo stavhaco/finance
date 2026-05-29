@@ -392,7 +392,8 @@ def _file_stat(path: Path) -> dict[str, Any]:
 TABLE_PURPOSES: dict[str, str] = {
     "companies": "TA-35 catalog and Yahoo fundamentals (updated each cycle).",
     "knowledge_events": "RSS/Maya ingest + optional English enrichment.",
-    "cycles": "One row per loop: NAV, benchmark, ingest headline count.",
+    "enrichment_jobs": "Async queue for Ollama knowledge enrichment.",
+    "cycles": "One row per loop: NAV, benchmark, timing, prompt version.",
     "decisions": "LLM summary, trades, skips, blocked — audit trail.",
     "price_bars": "Historical intraday OHLCV (simulation / Yahoo backfill).",
     "app_kv": "Internal keys (last bar backfill day, etc.).",
@@ -440,6 +441,8 @@ def load_model_runtime_snapshot(cfg: Config) -> dict[str, Any]:
         "cycle_log_dir": cfg.cycle_log_dir,
         "cycle_log_full_prompts": cfg.cycle_log_full_prompts,
         "knowledge_enrich_on_ingest": cfg.knowledge_enrich_on_ingest,
+        "knowledge_enrich_async": cfg.knowledge_enrich_async,
+        "prompt_version": cfg.prompt_version,
         "benchmark_symbol": cfg.benchmark_symbol,
         "watchlist_count": len(cfg.watchlist),
     }

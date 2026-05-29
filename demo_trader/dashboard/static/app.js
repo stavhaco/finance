@@ -92,7 +92,204 @@ function restartAutoRefresh() {
   refreshTimerId = null;
   const box = document.getElementById("auto-refresh");
   if (!box || !box.checked) return;
-  refreshTimerId = setInterval(refreshMainData, 120_000);
+  const fast = document.getElementById("fast-refresh");
+  const ms = fast && fast.checked ? 30_000 : 120_000;
+  refreshTimerId = setInterval(refreshMainData, ms);
+}
+
+function renderOpsStrip(status) {
+  const el = document.getElementById("ops-strip");
+  if (!el || !status) return;
+  const lc = status.last_cycle || {};
+  const ej = status.enrichment_jobs || {};
+  const alerts = status.alerts || [];
+  const alertHtml =
+    alerts.length === 0
+      ? `<span class="ops-pill ok">No alerts</span>`
+      : alerts
+          .slice(0, 4)
+          .map((a) => `<span class="ops-pill ${escapeHtml(a.level)}">${escapeHtml(a.message)}</span>`)
+          .join("");
+  const ollamaCls = status.ollama_ok ? "ok" : "error";
+  const taseCls = status.tase_trading_open ? "ok" : "muted";
+  el.innerHTML = `
+    <span class="ops-pill ${ollamaCls}">Ollama ${status.ollama_ok ? "up" : "down"}</span>
+    <span class="ops-pill ${taseCls}">TASE ${status.tase_trading_open ? "open" : "closed"}</span>
+    <span class="ops-pill">Cycle #${escapeHtml(String(lc.id || "—"))} · NAV ${fmtIls(lc.nav_ils)} · α ${fmtPct(lc.alpha_pct, false)}</span>
+    <span class="ops-pill">Enrich Q: ${Number(ej.pending || 0)} pending</span>
+    <span class="ops-pill muted">${escapeHtml(status.prompt_version || "")}</span>
+    ${alertHtml}`;
+}
+
+function parseChartTs(ts) {
+  if (!ts) return null;
+  const d = new Date(ts);
+  return Number.isNaN(d.getTime()) ? null : d.getTime();
+}
+
+function resizeNavCanvas(canvas) {
+  const rect = canvas.parentElement ? canvas.parentElement.getBoundingClientRect() : { width: 900 };
+  const cssW = Math.max(320, Math.floor(rect.width || 900));
+  const cssH = 180;
+  const dpr = window.devicePixelRatio || 1;
+  canvas.width = Math.floor(cssW * dpr);
+  canvas.height = Math.floor(cssH * dpr);
+  canvas.style.width = `${cssW}px`;
+  canvas.style.height = `${cssH}px`;
+  const ctx = canvas.getContext("2d");
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  return { ctx, w: cssW, h: cssH };
+}
+
+function renderNavChart(series) {
+  const canvas = document.getElementById("nav-chart");
+  if (!canvas) return;
+  const legend = document.getElementById("nav-chart-legend");
+  if (!series || !series.points || series.points.length < 2) {
+    const { ctx, w, h } = resizeNavCanvas(canvas);
+    ctx.clearRect(0, 0, w, h);
+    ctx.fillStyle = "#8b9cb3";
+    ctx.font = "12px system-ui";
+    ctx.fillText("Not enough cycle data yet", 12, 24);
+    if (legend) legend.textContent = "";
+    return;
+  }
+
+  const raw = series.points
+    .filter((p) => p.nav_ils != null && parseChartTs(p.ts) != null)
+    .map((p) => ({
+      t: parseChartTs(p.ts),
+      nav: Number(p.nav_ils),
+      ret: p.portfolio_return_pct == null ? null : Number(p.portfolio_return_pct),
+      alpha: p.alpha_pct == null ? null : Number(p.alpha_pct),
+    }))
+    .sort((a, b) => a.t - b.t);
+
+  if (raw.length < 2) return;
+
+  const { ctx, w, h } = resizeNavCanvas(canvas);
+  const pad = { l: 52, r: 52, t: 16, b: 32 };
+  const plotW = w - pad.l - pad.r;
+  const plotH = h - pad.t - pad.b;
+
+  const tMin = raw[0].t;
+  const tMax = raw[raw.length - 1].t;
+  const tSpan = tMax - tMin || 1;
+
+  const navs = raw.map((p) => p.nav);
+  let minN = Math.min(...navs);
+  let maxN = Math.max(...navs);
+  let navSpan = maxN - minN;
+  const meanN = navs.reduce((a, b) => a + b, 0) / navs.length;
+  const navFlat = navSpan < Math.max(200, meanN * 0.002);
+
+  const rets = raw.map((p) => p.ret).filter((v) => v != null && !Number.isNaN(v));
+  const useReturn = navFlat && rets.length >= 2;
+  let minY;
+  let maxY;
+  let yLabel;
+  let yValues;
+  if (useReturn) {
+    yValues = raw.map((p) => (p.ret == null || Number.isNaN(p.ret) ? null : p.ret));
+    minY = Math.min(...rets);
+    maxY = Math.max(...rets);
+    yLabel = "%";
+  } else {
+    yValues = navs;
+    minY = minN;
+    maxY = maxN;
+    yLabel = "₪";
+    if (navSpan < Math.max(500, meanN * 0.01)) {
+      const padN = Math.max(500, meanN * 0.01);
+      minN = meanN - padN;
+      maxN = meanN + padN;
+      navSpan = maxN - minN;
+    } else {
+      const margin = navSpan * 0.08;
+      minN -= margin;
+      maxN += margin;
+      navSpan = maxN - minN;
+    }
+    minY = minN;
+    maxY = maxN;
+  }
+  const ySpan = maxY - minY || 1;
+
+  const xAt = (t) => pad.l + ((t - tMin) / tSpan) * plotW;
+  const yAt = (v) => pad.t + plotH - ((v - minY) / ySpan) * plotH;
+
+  ctx.clearRect(0, 0, w, h);
+  ctx.fillStyle = "#1a2332";
+  ctx.fillRect(0, 0, w, h);
+
+  ctx.strokeStyle = "#2a3548";
+  ctx.lineWidth = 1;
+  for (let i = 0; i <= 4; i++) {
+    const y = pad.t + (i / 4) * plotH;
+    ctx.beginPath();
+    ctx.moveTo(pad.l, y);
+    ctx.lineTo(w - pad.r, y);
+    ctx.stroke();
+  }
+
+  ctx.strokeStyle = "#3d8bfd";
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  let started = false;
+  raw.forEach((p, i) => {
+    const v = useReturn ? yValues[i] : p.nav;
+    if (v == null || Number.isNaN(v)) return;
+    const x = xAt(p.t);
+    const y = yAt(v);
+    if (!started) {
+      ctx.moveTo(x, y);
+      started = true;
+    } else ctx.lineTo(x, y);
+  });
+  ctx.stroke();
+
+  if (!useReturn && rets.length >= 2) {
+    const minR = Math.min(...rets);
+    const maxR = Math.max(...rets);
+    const rSpan = maxR - minR || 1;
+    ctx.strokeStyle = "#3dd68c";
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([5, 4]);
+    ctx.beginPath();
+    started = false;
+    raw.forEach((p) => {
+      if (p.ret == null || Number.isNaN(p.ret)) return;
+      const x = xAt(p.t);
+      const y = pad.t + plotH - ((p.ret - minR) / rSpan) * plotH;
+      if (!started) {
+        ctx.moveTo(x, y);
+        started = true;
+      } else ctx.lineTo(x, y);
+    });
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
+
+  ctx.fillStyle = "#8b9cb3";
+  ctx.font = "11px system-ui";
+  if (useReturn) {
+    ctx.fillText(`${minY.toFixed(2)}%`, 4, h - pad.b);
+    ctx.fillText(`${maxY.toFixed(2)}%`, 4, pad.t + 10);
+  } else {
+    ctx.fillText(fmtIls(minY), 4, h - pad.b);
+    ctx.fillText(fmtIls(maxY), 4, pad.t + 10);
+    if (rets.length >= 2) {
+      ctx.textAlign = "right";
+      ctx.fillText("ret %", w - 4, pad.t + 10);
+      ctx.textAlign = "left";
+    }
+  }
+
+  if (legend) {
+    legend.textContent = useReturn
+      ? "Blue: portfolio return % (NAV flat in window — showing return instead)"
+      : "Blue: NAV (₪) · Green dashed: portfolio return %";
+  }
 }
 
 function renderAllocationBars(nav, rows) {
@@ -455,7 +652,9 @@ async function refreshMainData() {
   try {
     const promises = [
       fetchJson("/api/health"),
+      fetchJson("/api/status"),
       fetchJson("/api/portfolio"),
+      fetchJson(`/api/series/nav?days=${days}`),
       fetchJson(`/api/cycles?days=${days}`),
       fetchJson(`/api/knowledge?days=${days}${document.getElementById("maya-only").checked ? "&maya_only=1" : ""}`),
     ];
@@ -465,11 +664,17 @@ async function refreshMainData() {
     const bundle = await Promise.all(promises);
     let i = 0;
     const health = bundle[i++];
+    const opsStatus = bundle[i++];
     const portfolio = bundle[i++];
+    const navSeries = bundle[i++];
     const cycles = bundle[i++];
     const knowledge = bundle[i++];
     if (!health.ok) setStatus("Missing trader.db and/or paper_state.json at configured paths.", true);
     else setStatus(`Dashboard data ${new Date().toLocaleTimeString()}`);
+    renderOpsStrip(opsStatus);
+    const canvas = document.getElementById("nav-chart");
+    if (canvas) canvas.dataset.lastSeries = JSON.stringify(navSeries);
+    renderNavChart(navSeries);
     renderPortfolio(portfolio);
     renderCycles(cycles);
     renderKnowledge(knowledge);
@@ -506,6 +711,8 @@ document.getElementById("maya-only").addEventListener("change", refreshMainData)
 
 const chk = document.getElementById("auto-refresh");
 if (chk) chk.addEventListener("change", restartAutoRefresh);
+const fastChk = document.getElementById("fast-refresh");
+if (fastChk) fastChk.addEventListener("change", restartAutoRefresh);
 
 const svReload = document.getElementById("sv-reload");
 if (svReload) svReload.addEventListener("click", () => loadSupervision(true));
@@ -521,6 +728,17 @@ if (logTbl) {
     runInspect();
   });
 }
+
+window.addEventListener("resize", () => {
+  const canvas = document.getElementById("nav-chart");
+  if (canvas && canvas.dataset.lastSeries) {
+    try {
+      renderNavChart(JSON.parse(canvas.dataset.lastSeries));
+    } catch (_) {
+      /* ignore */
+    }
+  }
+});
 
 refreshMainData();
 restartAutoRefresh();

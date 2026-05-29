@@ -9,6 +9,7 @@ def dry_run_decision(
     trading_allowed: bool,
     max_trades: int,
     min_buys_when_trading: int,
+    recommendation_symbols: Sequence[str] | None = None,
 ) -> dict[str, Any]:
     """Deterministic model JSON for CI / cloud agents without Ollama."""
     syms = [s for s in watchlist if s.endswith(".TA")][: max(3, max_trades)]
@@ -32,8 +33,9 @@ def dry_run_decision(
             }
         )
 
+    rec_list = list(recommendation_symbols) if recommendation_symbols else list(watchlist)
     recommendations: list[dict[str, Any]] = []
-    for sym in watchlist:
+    for sym in rec_list:
         stance = "buy" if sym in trade_targets else "hold"
         if not trading_allowed:
             stance = "hold"

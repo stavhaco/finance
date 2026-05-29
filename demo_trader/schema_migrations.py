@@ -14,7 +14,7 @@ def _utc_iso() -> str:
 
 
 # Bump when adding a new migration at the bottom of MIGRATIONS.
-EXPECTED_LATEST_VERSION: int = 3
+EXPECTED_LATEST_VERSION: int = 4
 
 
 def ensure_migrations_table(conn: sqlite3.Connection) -> None:
@@ -126,6 +126,37 @@ def _upgrade_003_knowledge_enrichment(conn: sqlite3.Connection) -> None:
     )
     conn.commit()
 
+def _upgrade_004_enrichment_jobs_and_cycle_metrics(conn: sqlite3.Connection) -> None:
+    """Async enrichment queue + cycle timing / prompt version columns."""
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS enrichment_jobs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            knowledge_event_id INTEGER NOT NULL UNIQUE,
+            status TEXT NOT NULL DEFAULT 'pending',
+            attempts INTEGER NOT NULL DEFAULT 0,
+            last_error TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_enrichment_jobs_status ON enrichment_jobs(status, id);"
+    )
+    cur = conn.execute("PRAGMA table_info(cycles)")
+    have = {str(r[1]) for r in cur.fetchall()}
+    for col, typ in (
+        ("prompt_version", "TEXT"),
+        ("duration_ms", "INTEGER"),
+        ("phase_metrics_json", "TEXT"),
+        ("ingest_json", "TEXT"),
+    ):
+        if col not in have:
+            conn.execute(f"ALTER TABLE cycles ADD COLUMN {col} {typ}")
+    conn.commit()
+
+
 def _upgrade_001_company_fundamentals(conn: sqlite3.Connection) -> None:
     """Add Yahoo/fundamental analytics columns to `companies` (idempotent per column)."""
     cur = conn.execute("PRAGMA table_info(companies)")
@@ -143,6 +174,7 @@ MIGRATIONS: Sequence[tuple[int, str, MigrationFn]] = (
     (1, "001_company_fundamentals", _upgrade_001_company_fundamentals),
     (2, "002_simulation_bars_and_event_times", _upgrade_002_simulation_bars_and_event_times),
     (3, "003_knowledge_enrichment", _upgrade_003_knowledge_enrichment),
+    (4, "004_enrichment_jobs_and_cycle_metrics", _upgrade_004_enrichment_jobs_and_cycle_metrics),
 )
 
 
