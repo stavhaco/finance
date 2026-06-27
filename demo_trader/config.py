@@ -183,6 +183,11 @@ class Config:
         default_factory=lambda: max(1, _env_int("DEMO_TRADER_HIGH_NEWS_LOOKBACK_HOURS", 24))
     )
     dry_run: bool = field(default_factory=lambda: _env_bool("DEMO_TRADER_DRY_RUN", False))
+    # When unset/false (default): built-in scheduler loop sleeps and keeps going after failures.
+    # Set DEMO_TRADER_LOOP_EXIT_ON_NONZERO=1 so a bad cycle exits the process (old behaviour).
+    loop_exit_on_nonzero: bool = field(
+        default_factory=lambda: _env_bool("DEMO_TRADER_LOOP_EXIT_ON_NONZERO", False)
+    )
 
     def rss_feeds(self) -> Sequence[str]:
         raw = _env_str(

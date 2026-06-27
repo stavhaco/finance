@@ -857,9 +857,19 @@ def main(argv: list[str] | None = None) -> int:
     while True:
         rc = run_cycle(cfg)
         if rc != 0:
-            return rc
+            print(
+                f"WARN: cycle exited with code {rc}; "
+                + (
+                    "exiting (DEMO_TRADER_LOOP_EXIT_ON_NONZERO=1)."
+                    if cfg.loop_exit_on_nonzero
+                    else "waiting for next interval then retrying."
+                ),
+                flush=True,
+            )
+            if cfg.loop_exit_on_nonzero:
+                return rc
         sleep_s = max(60, int(cfg.interval_minutes) * 60)
-        print(f"sleeping {sleep_s}s until next cycle...")
+        print(f"sleeping {sleep_s}s until next cycle...", flush=True)
         time.sleep(sleep_s)
 
 
