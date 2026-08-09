@@ -19,13 +19,26 @@ def _parse_ts(ts: str | None) -> datetime | None:
     if not ts:
         return None
     try:
-        return datetime.fromisoformat(ts.replace("Z", "+00:00"))
+        dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
     except ValueError:
         return None
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
+def _aware_utc(dt: datetime | None) -> datetime | None:
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
 
 
 def _in_range(ts: str | None, since: datetime | None, until: datetime | None) -> bool:
     dt = _parse_ts(ts)
+    since = _aware_utc(since)
+    until = _aware_utc(until)
     if dt is None:
         return since is None and until is None
     if since and dt < since:
@@ -33,6 +46,14 @@ def _in_range(ts: str | None, since: datetime | None, until: datetime | None) ->
     if until and dt > until:
         return False
     return True
+
+
+def _iso_bound(dt: datetime | None) -> str | None:
+    """Serialize a bound for lexicographic ISO comparisons against stored UTC timestamps."""
+    aware = _aware_utc(dt)
+    if aware is None:
+        return None
+    return aware.replace(microsecond=0).isoformat()
 
 
 def _cycle_log_path(log_dir: Path, cycle_id: int, ts: str | None) -> Path | None:
@@ -448,13 +469,17 @@ def load_model_runtime_snapshot(cfg: Config) -> dict[str, Any]:
     }
 
 
-def load_supervision_overview(cfg: Config, *, cycle_log_limit: int = 100) -> dict[str, Any]:
+def load_supervision_overview(
+    cfg: Config, *, cycle_log_limit: int = 250, cycle_log_offset: int = 0
+) -> dict[str, Any]:
     db_p = Path(cfg.db_path)
     state_p = Path(cfg.state_path)
     log_dir = Path(cfg.cycle_log_dir)
     logs: list[dict[str, Any]] = []
     log_bytes_total = 0
     log_count = 0
+    limit = max(1, min(int(cycle_log_limit), 1000))
+    offset = max(0, int(cycle_log_offset))
     if log_dir.is_dir():
         all_logs = sorted(
             [p for p in log_dir.glob("cycle_*.json") if p.is_file()],
@@ -462,7 +487,7 @@ def load_supervision_overview(cfg: Config, *, cycle_log_limit: int = 100) -> dic
             reverse=True,
         )
         log_count = len(all_logs)
-        for p in all_logs[: max(1, int(cycle_log_limit))]:
+        for p in all_logs[offset : offset + limit]:
             st = p.stat()
             sz = int(st.st_size)
             log_bytes_total += sz
@@ -492,12 +517,17 @@ def load_supervision_overview(cfg: Config, *, cycle_log_limit: int = 100) -> dic
             "cycle_log_dir_exists": log_dir.is_dir(),
             "cycle_log_file_count": log_count,
             "cycle_logs_listed_byte_sum": log_bytes_total,
+            "cycle_logs_listed": len(logs),
+            "cycle_logs_offset": offset,
+            "cycle_logs_limit": limit,
+            "cycle_logs_has_more": (offset + len(logs)) < log_count,
         },
         "sqlite_tables": tables,
         "cycle_logs": logs,
         "notes": [
             "Cycle JSON files mirror ingest counts, prompts, and model_response when DEMO_TRADER_CYCLE_LOG_ENABLED=1.",
             "`model_runtime` reflects this dashboard server's Config/env (align with cron/trader env for exact match).",
+            "Cycle log list is paginated — use Load more if the folder has more files than shown.",
         ],
         "model_runtime": load_model_runtime_snapshot(cfg),
     }
@@ -718,24 +748,46 @@ def load_cycles(
     since: datetime | None = None,
     until: datetime | None = None,
     limit: int = 200,
-) -> list[dict[str, Any]]:
+    offset: int = 0,
+) -> dict[str, Any]:
+    """Load cycle cards for the dashboard.
+
+    Filtering is done in SQL (not after a small LIMIT), so older sessions in the
+    selected timeframe are not silently dropped when recent volume is high.
+    """
     conn = connect_readonly(cfg.db_path)
     log_dir = Path(cfg.cycle_log_dir)
+    limit = max(1, min(int(limit), 500))
+    offset = max(0, int(offset))
+    since_s = _iso_bound(since)
+    until_s = _iso_bound(until)
     try:
         cmap = _company_map(conn)
+        where: list[str] = []
+        params: list[Any] = []
+        if since_s:
+            where.append("ts >= ?")
+            params.append(since_s)
+        if until_s:
+            where.append("ts <= ?")
+            params.append(until_s)
+        where_sql = (" WHERE " + " AND ".join(where)) if where else ""
+        total = int(conn.execute(f"SELECT COUNT(*) AS n FROM cycles{where_sql}", params).fetchone()["n"])
         cur = conn.execute(
-            """
+            f"""
             SELECT id, ts, trading_allowed, knowledge_only, nav_ils, benchmark_symbol,
                    benchmark_px, portfolio_return_pct, benchmark_return_pct, alpha_pct, headline_count
             FROM cycles
+            {where_sql}
             ORDER BY id DESC
-            LIMIT ?
+            LIMIT ? OFFSET ?
             """,
-            (int(limit) * 3,),
+            (*params, limit, offset),
         )
         cycles_raw = cur.fetchall()
         out: list[dict[str, Any]] = []
         for c in cycles_raw:
+            # Defensive: keep Python filter for odd/legacy timestamp shapes.
             if not _in_range(c["ts"], since, until):
                 continue
             cid = int(c["id"])
@@ -888,9 +940,14 @@ def load_cycles(
                     "cycle_log": str(log_path) if log_path else None,
                 }
             )
-            if len(out) >= limit:
-                break
-        return out
+        return {
+            "cycles": out,
+            "total": total,
+            "returned": len(out),
+            "limit": limit,
+            "offset": offset,
+            "has_more": (offset + len(out)) < total,
+        }
     finally:
         conn.close()
 
@@ -902,21 +959,43 @@ def load_knowledge(
     until: datetime | None = None,
     source_prefix: str | None = None,
     limit: int = 300,
-) -> list[dict[str, Any]]:
+    offset: int = 0,
+) -> dict[str, Any]:
     conn = connect_readonly(cfg.db_path)
+    limit = max(1, min(int(limit), 500))
+    offset = max(0, int(offset))
+    since_s = _iso_bound(since)
+    until_s = _iso_bound(until)
     try:
         cmap = _company_map(conn)
+        where: list[str] = []
+        params: list[Any] = []
+        # Filter on the same coalesced event clock used for ordering.
+        if since_s:
+            where.append("COALESCE(event_time, ts) >= ?")
+            params.append(since_s)
+        if until_s:
+            where.append("COALESCE(event_time, ts) <= ?")
+            params.append(until_s)
+        if source_prefix:
+            where.append("source LIKE ?")
+            params.append(f"{source_prefix}%")
+        where_sql = (" WHERE " + " AND ".join(where)) if where else ""
+        total = int(
+            conn.execute(f"SELECT COUNT(*) AS n FROM knowledge_events{where_sql}", params).fetchone()["n"]
+        )
         cur = conn.execute(
-            """
+            f"""
             SELECT id, ts, event_time, source, url, title, matched_symbol,
                    title_en, executive_summary_en, body_translation_en,
                    sentiment, trade_usefulness, is_broad_market,
                    enrichment_status, snippet
             FROM knowledge_events
+            {where_sql}
             ORDER BY datetime(COALESCE(event_time, ts)) DESC
-            LIMIT ?
+            LIMIT ? OFFSET ?
             """,
-            (int(limit) * 2,),
+            (*params, limit, offset),
         )
         rows = []
         for r in cur.fetchall():
@@ -924,8 +1003,6 @@ def load_knowledge(
             if not _in_range(when, since, until):
                 continue
             src = r["source"] or ""
-            if source_prefix and not src.startswith(source_prefix):
-                continue
             is_maya = src.startswith("maya.")
             msym = str(r["matched_symbol"] or "").strip() or None
             rows.append(
@@ -949,9 +1026,14 @@ def load_knowledge(
                     "snippet": (r["snippet"] or "")[:500],
                 }
             )
-            if len(rows) >= limit:
-                break
-        return rows
+        return {
+            "items": rows,
+            "total": total,
+            "returned": len(rows),
+            "limit": limit,
+            "offset": offset,
+            "has_more": (offset + len(rows)) < total,
+        }
     finally:
         conn.close()
 

@@ -1,5 +1,11 @@
 const BAR_COLORS = ["#3d8bfd", "#3dd68c", "#f0b429", "#b388ff", "#ff7eb9", "#6ee7b7", "#8899aa"];
+const PAGE_CYCLES = 100;
+const PAGE_KNOWLEDGE = 200;
+const PAGE_SV_LOGS = 250;
 let refreshTimerId = null;
+let cyclesState = { items: [], total: 0, offset: 0, hasMore: false };
+let knowledgeState = { items: [], total: 0, offset: 0, hasMore: false };
+let svLogsState = { items: [], total: 0, offset: 0, hasMore: false };
 
 function fmtIls(n) {
   if (n == null || Number.isNaN(n)) return "—";
@@ -35,6 +41,24 @@ function fmtBytes(n) {
 
 function daysParam() {
   return document.getElementById("days").value;
+}
+
+function daysQuery() {
+  const d = daysParam();
+  return d === "all" ? "all" : d;
+}
+
+function setListMeta(elId, shown, total, label) {
+  const el = document.getElementById(elId);
+  if (!el) return;
+  if (!total) {
+    el.textContent = `No ${label} in this timeframe.`;
+    return;
+  }
+  el.textContent =
+    shown >= total
+      ? `Showing all ${total} ${label}.`
+      : `Showing ${shown} of ${total} ${label} (newest first).`;
 }
 
 function escapeHtml(s) {
@@ -384,85 +408,91 @@ function citedArticlesBlock(articles) {
     .join("")}</div></details>`;
 }
 
-function renderCycles(data) {
-  const root = document.getElementById("cycles-list");
-  const cycles = data.cycles || [];
-  if (!cycles.length) {
-    root.innerHTML = "<p class='muted'>No cycles in this timeframe.</p>";
-    return;
-  }
-  root.innerHTML = cycles
-    .map((c) => {
-      const openCls = c.market_open ? "open" : "closed";
-      const openLbl = c.market_open ? "Market open" : "Market closed";
-      const perf = `Portfolio ${fmtPct(c.portfolio_return_pct)} · TA-35 ${fmtPct(c.benchmark_return_pct)} · α ${fmtPct(c.alpha_pct)}`;
-      const benchLbl = c.benchmark_label ? ` · bench: ${escapeHtml(c.benchmark_label)}` : "";
-      const nar = (c.summary_en || "").trim();
-      const citedBlock = citedArticlesBlock(c.cited_articles);
-      const narrBlock =
-        nar.length === 0
-          ? ""
-          : `<details class="cycle-narr"><summary>Model summary</summary><div class="why-en narr-block narr-ltr">${nl2brEscaped(
-              nar
-            )}</div></details>`;
-      const actions = (c.actions || [])
-        .map((a) => {
-          const rlBlock = actionReasonHtml(a);
-          const who = escapeHtml(a.company_label || a.symbol || "");
-          if (a.type === "trade") {
-            const side = (a.side || "").toLowerCase();
-            return `<div class="action"><div><span class="side-${side}">${escapeHtml(a.side)}</span> · <strong>${who}</strong> ×${escapeHtml(
-              String(a.qty ?? "")
-            )}</div>${rlBlock}</div>`;
-          }
-          if (a.type === "blocked") {
-            return `<div class="action"><div>Blocked ${escapeHtml(a.side || "")} · <strong>${who}</strong></div>${rlBlock}</div>`;
-          }
-          if (a.type === "hold") {
-            return `<div class="action">${rlBlock}</div>`;
-          }
-          return `<div class="action"><div>${escapeHtml(a.type)} ${who}</div>${rlBlock}</div>`;
-        })
-        .join("");
-      return `
-        <article class="cycle">
-          <div class="cycle-head">
-            <span class="ts">#${c.cycle_id} · ${escapeHtml(c.ts)}</span>
-            <span class="badge ${openCls}">${openLbl}</span>
-            <span class="badge">${c.executed_trades} executed trades</span>
-            <span class="muted">${perf}${benchLbl}</span>
-          </div>
-          ${citedBlock}
-          ${narrBlock}
-          ${actions || "<p class='muted'>Nothing recorded this cycle.</p>"}
-        </article>`;
+function cycleCardHtml(c) {
+  const openCls = c.market_open ? "open" : "closed";
+  const openLbl = c.market_open ? "Market open" : "Market closed";
+  const perf = `Portfolio ${fmtPct(c.portfolio_return_pct)} · TA-35 ${fmtPct(c.benchmark_return_pct)} · α ${fmtPct(c.alpha_pct)}`;
+  const benchLbl = c.benchmark_label ? ` · bench: ${escapeHtml(c.benchmark_label)}` : "";
+  const nar = (c.summary_en || "").trim();
+  const citedBlock = citedArticlesBlock(c.cited_articles);
+  const narrBlock =
+    nar.length === 0
+      ? ""
+      : `<details class="cycle-narr"><summary>Model summary</summary><div class="why-en narr-block narr-ltr">${nl2brEscaped(
+          nar
+        )}</div></details>`;
+  const actions = (c.actions || [])
+    .map((a) => {
+      const rlBlock = actionReasonHtml(a);
+      const who = escapeHtml(a.company_label || a.symbol || "");
+      if (a.type === "trade") {
+        const side = (a.side || "").toLowerCase();
+        return `<div class="action"><div><span class="side-${side}">${escapeHtml(a.side)}</span> · <strong>${who}</strong> ×${escapeHtml(
+          String(a.qty ?? "")
+        )}</div>${rlBlock}</div>`;
+      }
+      if (a.type === "blocked") {
+        return `<div class="action"><div>Blocked ${escapeHtml(a.side || "")} · <strong>${who}</strong></div>${rlBlock}</div>`;
+      }
+      if (a.type === "hold") {
+        return `<div class="action">${rlBlock}</div>`;
+      }
+      return `<div class="action"><div>${escapeHtml(a.type)} ${who}</div>${rlBlock}</div>`;
     })
     .join("");
+  return `
+    <article class="cycle">
+      <div class="cycle-head">
+        <span class="ts">#${c.cycle_id} · ${escapeHtml(c.ts)}</span>
+        <span class="badge ${openCls}">${openLbl}</span>
+        <span class="badge">${c.executed_trades} executed trades</span>
+        <span class="muted">${perf}${benchLbl}</span>
+      </div>
+      ${citedBlock}
+      ${narrBlock}
+      ${actions || "<p class='muted'>Nothing recorded this cycle.</p>"}
+    </article>`;
 }
 
-function renderKnowledge(data) {
+function renderCyclesFromState() {
+  const root = document.getElementById("cycles-list");
+  const moreBtn = document.getElementById("cycles-more");
+  const cycles = cyclesState.items;
+  setListMeta("cycles-meta", cycles.length, cyclesState.total, "cycles");
+  if (!cycles.length) {
+    root.innerHTML = "<p class='muted'>No cycles in this timeframe.</p>";
+  } else {
+    root.innerHTML = cycles.map(cycleCardHtml).join("");
+  }
+  if (moreBtn) moreBtn.hidden = !cyclesState.hasMore;
+}
+
+function knowledgeCardHtml(k) {
+  const title = k.title_en || k.title;
+  const sum = k.executive_summary_en || "(no summary yet)";
+  const flash = k.is_maya_flash ? '<span class="badge open">Maya flash</span>' : "";
+  const match = k.matched_company_label || k.matched_symbol || "—";
+  return `
+    <article class="k-item">
+      <h3>${escapeHtml(title)}</h3>
+      <div class="k-meta">${escapeHtml(k.event_time || k.ts)} · ${escapeHtml(k.source)} · matched: ${escapeHtml(match)}
+        · ${escapeHtml(k.sentiment || "—")} · ${escapeHtml(k.trade_usefulness || "—")} ${flash}</div>
+      <p class="k-summary">${escapeHtml(sum)}</p>
+      ${k.url ? `<p class="muted"><a href="${escapeHtml(k.url)}" target="_blank" rel="noopener">Open source link</a></p>` : ""}
+    </article>`;
+}
+
+function renderKnowledgeFromState() {
   const root = document.getElementById("knowledge-list");
-  const items = data.items || [];
+  const moreBtn = document.getElementById("knowledge-more");
+  const items = knowledgeState.items;
+  setListMeta("knowledge-meta", items.length, knowledgeState.total, "knowledge events");
   if (!items.length) {
     root.innerHTML = "<p class='muted'>No knowledge events in this timeframe.</p>";
-    return;
+  } else {
+    root.innerHTML = items.map(knowledgeCardHtml).join("");
   }
-  root.innerHTML = items
-    .map((k) => {
-      const title = k.title_en || k.title;
-      const sum = k.executive_summary_en || "(no summary yet)";
-      const flash = k.is_maya_flash ? '<span class="badge open">Maya flash</span>' : "";
-      const match = k.matched_company_label || k.matched_symbol || "—";
-      return `
-        <article class="k-item">
-          <h3>${escapeHtml(title)}</h3>
-          <div class="k-meta">${escapeHtml(k.event_time || k.ts)} · ${escapeHtml(k.source)} · matched: ${escapeHtml(match)}
-            · ${escapeHtml(k.sentiment || "—")} · ${escapeHtml(k.trade_usefulness || "—")} ${flash}</div>
-          <p class="k-summary">${escapeHtml(sum)}</p>
-          ${k.url ? `<p class="muted"><a href="${escapeHtml(k.url)}" target="_blank" rel="noopener">Open source link</a></p>` : ""}
-        </article>`;
-    })
-    .join("");
+  if (moreBtn) moreBtn.hidden = !knowledgeState.hasMore;
 }
 
 function renderSupervisionOverview(ov) {
@@ -512,9 +542,11 @@ function renderSupervisionOverview(ov) {
 function fillCycleSelect(files) {
   const sel = document.getElementById("sv-cycle-select");
   const keep = sel.value;
+  const seen = new Set();
   sel.innerHTML = '<option value="">— choose —</option>';
   for (const row of files || []) {
-    if (!row.cycle_id) continue;
+    if (!row.cycle_id || seen.has(row.cycle_id)) continue;
+    seen.add(row.cycle_id);
     const o = document.createElement("option");
     o.value = String(row.cycle_id);
     o.textContent = `#${row.cycle_id} · ${row.filename}`;
@@ -522,6 +554,26 @@ function fillCycleSelect(files) {
   }
   const ok = Array.from(sel.options).some((o) => o.value === keep);
   if (ok) sel.value = keep;
+}
+
+function applySupervisionLogs(ov, { append = false } = {}) {
+  const paths = ov.paths || {};
+  const batch = ov.cycle_logs || [];
+  const total = Number(paths.cycle_log_file_count || 0);
+  const offset = Number(paths.cycle_logs_offset || 0);
+  if (append) {
+    svLogsState.items = svLogsState.items.concat(batch);
+  } else {
+    svLogsState.items = batch.slice();
+  }
+  svLogsState.total = total;
+  svLogsState.offset = offset + batch.length;
+  svLogsState.hasMore = !!paths.cycle_logs_has_more;
+  setListMeta("sv-log-meta", svLogsState.items.length, svLogsState.total, "cycle log files");
+  renderLogTable(svLogsState.items);
+  fillCycleSelect(svLogsState.items);
+  const moreBtn = document.getElementById("sv-logs-more");
+  if (moreBtn) moreBtn.hidden = !svLogsState.hasMore;
 }
 
 function renderLogTable(files) {
@@ -634,10 +686,9 @@ async function loadSupervision(force = false) {
   setSvBanner("", false);
   setSvStatus("Loading overview…");
   try {
-    const ov = await fetchJson("/api/supervision/overview?cycle_log_limit=120");
+    const ov = await fetchJson(`/api/supervision/overview?cycle_log_limit=${PAGE_SV_LOGS}&cycle_log_offset=0`);
     renderSupervisionOverview(ov);
-    renderLogTable(ov.cycle_logs);
-    fillCycleSelect(ov.cycle_logs);
+    applySupervisionLogs(ov, { append: false });
     setSvStatus(`Supervision refreshed ${new Date().toLocaleTimeString()}`);
   } catch (e) {
     setSvBanner(`Supervision failed: ${e}`, true);
@@ -646,20 +697,76 @@ async function loadSupervision(force = false) {
   }
 }
 
+async function loadMoreSvLogs() {
+  if (!svLogsState.hasMore) return;
+  setSvStatus("Loading more log files…");
+  try {
+    const ov = await fetchJson(
+      `/api/supervision/overview?cycle_log_limit=${PAGE_SV_LOGS}&cycle_log_offset=${svLogsState.offset}`
+    );
+    applySupervisionLogs(ov, { append: true });
+    setSvStatus(`Showing ${svLogsState.items.length} of ${svLogsState.total} log files`);
+  } catch (e) {
+    setSvStatus(String(e), true);
+  }
+}
+
+function applyCyclesPayload(data, { append = false } = {}) {
+  const batch = data.cycles || [];
+  if (append) cyclesState.items = cyclesState.items.concat(batch);
+  else cyclesState.items = batch.slice();
+  cyclesState.total = Number(data.total || 0);
+  cyclesState.offset = Number(data.offset || 0) + batch.length;
+  cyclesState.hasMore = !!data.has_more;
+  renderCyclesFromState();
+}
+
+function applyKnowledgePayload(data, { append = false } = {}) {
+  const batch = data.items || [];
+  if (append) knowledgeState.items = knowledgeState.items.concat(batch);
+  else knowledgeState.items = batch.slice();
+  knowledgeState.total = Number(data.total || 0);
+  knowledgeState.offset = Number(data.offset || 0) + batch.length;
+  knowledgeState.hasMore = !!data.has_more;
+  renderKnowledgeFromState();
+}
+
+async function loadMoreCycles() {
+  if (!cyclesState.hasMore) return;
+  const days = daysQuery();
+  const data = await fetchJson(`/api/cycles?days=${days}&limit=${PAGE_CYCLES}&offset=${cyclesState.offset}`);
+  applyCyclesPayload(data, { append: true });
+}
+
+async function loadMoreKnowledge() {
+  if (!knowledgeState.hasMore) return;
+  const days = daysQuery();
+  const maya = document.getElementById("maya-only").checked ? "&maya_only=1" : "";
+  const data = await fetchJson(
+    `/api/knowledge?days=${days}&limit=${PAGE_KNOWLEDGE}&offset=${knowledgeState.offset}${maya}`
+  );
+  applyKnowledgePayload(data, { append: true });
+}
+
 async function refreshMainData() {
   setStatus("Loading…");
-  const days = daysParam();
+  const days = daysQuery();
+  const navDays = days === "all" ? "3650" : days;
   try {
     const promises = [
       fetchJson("/api/health"),
       fetchJson("/api/status"),
       fetchJson("/api/portfolio"),
-      fetchJson(`/api/series/nav?days=${days}`),
-      fetchJson(`/api/cycles?days=${days}`),
-      fetchJson(`/api/knowledge?days=${days}${document.getElementById("maya-only").checked ? "&maya_only=1" : ""}`),
+      fetchJson(`/api/series/nav?days=${navDays}`),
+      fetchJson(`/api/cycles?days=${days}&limit=${PAGE_CYCLES}&offset=0`),
+      fetchJson(
+        `/api/knowledge?days=${days}&limit=${PAGE_KNOWLEDGE}&offset=0${
+          document.getElementById("maya-only").checked ? "&maya_only=1" : ""
+        }`
+      ),
     ];
     if (activeTabId() === "supervision") {
-      promises.push(fetchJson("/api/supervision/overview?cycle_log_limit=120"));
+      promises.push(fetchJson(`/api/supervision/overview?cycle_log_limit=${PAGE_SV_LOGS}&cycle_log_offset=0`));
     }
     const bundle = await Promise.all(promises);
     let i = 0;
@@ -676,14 +783,13 @@ async function refreshMainData() {
     if (canvas) canvas.dataset.lastSeries = JSON.stringify(navSeries);
     renderNavChart(navSeries);
     renderPortfolio(portfolio);
-    renderCycles(cycles);
-    renderKnowledge(knowledge);
+    applyCyclesPayload(cycles, { append: false });
+    applyKnowledgePayload(knowledge, { append: false });
     if (activeTabId() === "supervision" && bundle[i]) {
       setSvBanner("", false);
       const ov = bundle[i];
       renderSupervisionOverview(ov);
-      renderLogTable(ov.cycle_logs);
-      fillCycleSelect(ov.cycle_logs);
+      applySupervisionLogs(ov, { append: false });
     }
   } catch (e) {
     setStatus(String(e), true);
@@ -718,6 +824,13 @@ const svReload = document.getElementById("sv-reload");
 if (svReload) svReload.addEventListener("click", () => loadSupervision(true));
 const inspectBtn = document.getElementById("sv-inspect-btn");
 if (inspectBtn) inspectBtn.addEventListener("click", runInspect);
+const cyclesMore = document.getElementById("cycles-more");
+if (cyclesMore) cyclesMore.addEventListener("click", () => loadMoreCycles().catch((e) => setStatus(String(e), true)));
+const knowledgeMore = document.getElementById("knowledge-more");
+if (knowledgeMore)
+  knowledgeMore.addEventListener("click", () => loadMoreKnowledge().catch((e) => setStatus(String(e), true)));
+const svLogsMore = document.getElementById("sv-logs-more");
+if (svLogsMore) svLogsMore.addEventListener("click", () => loadMoreSvLogs());
 
 const logTbl = document.getElementById("sv-log-table");
 if (logTbl) {
