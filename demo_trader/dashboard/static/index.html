@@ -17,6 +17,7 @@
           <option value="30" selected>30 days</option>
           <option value="90">90 days</option>
           <option value="365">1 year</option>
+          <option value="all">All time</option>
         </select>
       </label>
       <button id="refresh" type="button">Refresh now</button>
@@ -58,7 +59,11 @@
     </div>
     <section>
       <h2>Cycles <span class="muted">(newest first)</span></h2>
+      <p id="cycles-meta" class="muted list-meta"></p>
       <div id="cycles-list"></div>
+      <div class="toolbar sub">
+        <button type="button" id="cycles-more" hidden>Load more cycles</button>
+      </div>
     </section>
   </main>
 
@@ -66,7 +71,11 @@
     <div class="toolbar sub">
       <label><input type="checkbox" id="maya-only" /> Maya flash / reports only</label>
     </div>
+    <p id="knowledge-meta" class="muted list-meta"></p>
     <section id="knowledge-list"></section>
+    <div class="toolbar sub">
+      <button type="button" id="knowledge-more" hidden>Load more knowledge</button>
+    </div>
   </main>
 
   <main id="tab-supervision" class="panel" role="tabpanel">
@@ -84,7 +93,11 @@
       <div>
         <h2>Cycle JSON files</h2>
         <p class="muted">Newest first. “Inspect” opens below.</p>
+        <p id="sv-log-meta" class="muted list-meta"></p>
         <div id="sv-log-table"></div>
+        <div class="toolbar sub">
+          <button type="button" id="sv-logs-more" hidden>Load more log files</button>
+        </div>
       </div>
       <div>
         <h2>Inspect one cycle</h2>

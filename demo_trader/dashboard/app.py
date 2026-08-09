@@ -54,14 +54,19 @@ def create_app(cfg: Config | None = None) -> Flask:
             request.args.get("until"),
         )
         if since is None and until is None:
-            days = int(request.args.get("days", "30"))
-            since = datetime.now(timezone.utc) - timedelta(days=max(1, days))
+            days_raw = request.args.get("days", "30")
+            if str(days_raw).lower() not in {"all", "0", ""}:
+                days = int(days_raw)
+                if days > 0:
+                    since = datetime.now(timezone.utc) - timedelta(days=days)
         limit = int(request.args.get("limit", "100"))
+        offset = int(request.args.get("offset", "0"))
+        payload = load_cycles(config, since=since, until=until, limit=limit, offset=offset)
         return jsonify(
             {
                 "since": since.isoformat() if since else None,
                 "until": until.isoformat() if until else None,
-                "cycles": load_cycles(config, since=since, until=until, limit=limit),
+                **payload,
             }
         )
 
@@ -72,25 +77,32 @@ def create_app(cfg: Config | None = None) -> Flask:
             request.args.get("until"),
         )
         if since is None and until is None:
-            days = int(request.args.get("days", "30"))
-            since = datetime.now(timezone.utc) - timedelta(days=max(1, days))
+            days_raw = request.args.get("days", "30")
+            if str(days_raw).lower() not in {"all", "0", ""}:
+                days = int(days_raw)
+                if days > 0:
+                    since = datetime.now(timezone.utc) - timedelta(days=days)
         source = request.args.get("source")
         maya_only = request.args.get("maya_only", "").lower() in {"1", "true", "yes"}
         prefix = "maya." if maya_only else source
         limit = int(request.args.get("limit", "200"))
-        rows = load_knowledge(config, since=since, until=until, source_prefix=prefix, limit=limit)
+        offset = int(request.args.get("offset", "0"))
+        payload = load_knowledge(
+            config, since=since, until=until, source_prefix=prefix, limit=limit, offset=offset
+        )
         return jsonify(
             {
                 "since": since.isoformat() if since else None,
                 "until": until.isoformat() if until else None,
-                "items": rows,
+                **payload,
             }
         )
 
     @app.get("/api/supervision/overview")
     def api_supervision_overview():
-        limit = int(request.args.get("cycle_log_limit", "100"))
-        return jsonify(load_supervision_overview(config, cycle_log_limit=limit))
+        limit = int(request.args.get("cycle_log_limit", "250"))
+        offset = int(request.args.get("cycle_log_offset", "0"))
+        return jsonify(load_supervision_overview(config, cycle_log_limit=limit, cycle_log_offset=offset))
 
     @app.get("/api/status")
     def api_status():

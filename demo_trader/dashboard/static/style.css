@@ -126,6 +126,8 @@ header h1 { margin: 0; font-size: 1.25rem; font-weight: 600; }
 
 section h2 { font-size: 1rem; margin: 0 0 0.75rem; font-weight: 600; }
 .muted { color: var(--muted); font-weight: 400; font-size: 0.85rem; }
+.list-meta { margin: 0 0 0.6rem; }
+.toolbar.sub { margin-top: 0.75rem; gap: 0.75rem; flex-wrap: wrap; }
 
 table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
 th, td { text-align: left; padding: 0.45rem 0.5rem; border-bottom: 1px solid var(--border); }
